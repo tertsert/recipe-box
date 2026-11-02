@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recipe Box</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍲</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <a href="#/" class="brand">Recipe Box</a>
+  </header>
+
+  <main id="app"></main>
+
+  <template id="home-tpl">
+    <section class="add">
+      <h1>Just the recipe.</h1>
+      <p class="lede">Paste a link from any recipe site. We'll keep the ingredients and steps and toss the rest.</p>
+      <form id="add-form" autocomplete="off">
+        <input id="url" type="url" inputmode="url" placeholder="https://…" required aria-label="Recipe link">
+        <button type="submit">Save recipe</button>
+      </form>
+      <p id="add-status" class="status" role="status"></p>
+      <details class="bookmarklet">
+        <summary>Some sites block us — use the bookmark button</summary>
+        <p>A few big sites (Allrecipes, Serious Eats, Simply Recipes…) won't let our server read them. For those, save from the recipe page itself:</p>
+        <ol>
+          <li><strong>Computer:</strong> drag this button to your bookmarks bar → <a id="bm-link" class="bm-button" href="#">Save to Recipe Box</a></li>
+          <li><strong>Phone:</strong> bookmark any page, then edit that bookmark, name it “Save to Recipe Box” and replace its address with this code: <button type="button" id="bm-copy" class="ghost small">Copy code</button></li>
+          <li>On a recipe page, tap the bookmark. You'll land back here with the recipe saved.</li>
+        </ol>
+      </details>
+    </section>
+
+    <section class="saved">
+      <div class="saved-head">
+        <h2>Saved recipes</h2>
+        <input id="search" type="search" placeholder="Search" aria-label="Search recipes">
+      </div>
+      <div id="grid" class="grid"></div>
+    </section>
+  </template>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

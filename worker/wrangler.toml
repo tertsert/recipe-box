@@ -1,0 +1,17 @@
+name = "recipe-box-api"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+# Set to your GitHub Pages origin, e.g. "https://yourname.github.io" (no trailing slash).
+ALLOWED_ORIGIN = "*"
+# Full URL of the GitHub Pages site, e.g. "https://yourname.github.io/recipe-box".
+SITE_URL = ""
+
+[[kv_namespaces]]
+binding = "RECIPES"
+# Replace with the id printed by: npx wrangler kv namespace create RECIPES
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Optional passcode for adding/deleting recipes:
+#   npx wrangler secret put SUBMIT_PASSCODE
