@@ -445,9 +445,9 @@ function showSalmonNote() {
   el.innerHTML = `
     <div class="pick-card salmon-card" role="dialog" aria-label="A note for Alaskan Salmon">
       <div class="salmon-fish">${FISH}</div>
-      <h2>Hey, Alaskan Salmon</h2>
+      <h2>My Alaskan Salmon</h2>
       <p>You're my favorite catch.</p>
-      <button type="button" class="btn">Love you too ${HEART}</button>
+      <button type="button" class="btn">I love you ${HEART}</button>
     </div>`;
   el.addEventListener("click", (e) => {
     if (e.target !== el && !e.target.closest("button")) return;
