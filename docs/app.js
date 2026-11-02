@@ -42,7 +42,7 @@ function render() {
   if (m) {
     renderRecipe(decodeURIComponent(m[1]));
   } else {
-    document.title = "Recipe Box";
+    document.title = "A+M Recipe Box";
     renderHome();
   }
 }
@@ -219,7 +219,7 @@ async function renderRecipe(id) {
     ["Makes", r.yield],
   ].filter(([, v]) => v);
 
-  document.title = r.name + " · Recipe Box";
+  document.title = r.name + " · A+M Recipe Box";
   app.innerHTML = `
     <article class="recipe">
       <a href="#/" class="back no-print">← All recipes</a>
