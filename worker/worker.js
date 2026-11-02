@@ -4,14 +4,14 @@
 //   GET    /api/recipes        list saved recipes (summary only)
 //   GET    /api/recipes/:id    one full recipe
 //   POST   /api/recipes        { url } -> fetch page, extract recipe, save it
+//   PATCH  /api/recipes/:id    { made?, rating? } -> update status / stars
 //   DELETE /api/recipes/:id    remove a recipe
-//   POST   /api/import         form post from the bookmarklet (url, data, passcode)
+//   POST   /api/import         form post from the bookmarklet (url, data)
 //
 // Bindings (set in wrangler.toml or the Cloudflare dashboard):
 //   RECIPES          KV namespace (required)
 //   SITE_URL         e.g. https://yourname.github.io/recipe-box  (where the bookmarklet returns to)
 //   ALLOWED_ORIGIN   e.g. https://yourname.github.io  (optional, defaults to *)
-//   SUBMIT_PASSCODE  secret; if set, POST/DELETE need header X-Passcode (optional)
 
 export default {
   async fetch(request, env) {
@@ -40,14 +40,9 @@ async function route(request, env) {
 
   if (request.method === "GET" && !id) return listRecipes(env);
   if (request.method === "GET" && id) return getRecipe(env, id);
-  if (request.method === "POST" && !id) {
-    checkPasscode(request, env);
-    return addRecipe(request, env);
-  }
-  if (request.method === "DELETE" && id) {
-    checkPasscode(request, env);
-    return deleteRecipe(env, id);
-  }
+  if (request.method === "POST" && !id) return addRecipe(request, env);
+  if (request.method === "PATCH" && id) return updateRecipe(request, env, id);
+  if (request.method === "DELETE" && id) return deleteRecipe(env, id);
   throw httpError(405, "Method not allowed");
 }
 
@@ -90,7 +85,6 @@ async function importRecipe(request, env) {
   const site = (env.SITE_URL || "").replace(/\/+$/, "");
   try {
     const form = await request.formData();
-    if (env.SUBMIT_PASSCODE && form.get("passcode") !== env.SUBMIT_PASSCODE) throw httpError(401, "Wrong passcode.");
     const target = normalizeUrl(form.get("url"));
     const recipe = (await findExisting(env, target)) || (await saveRecipe(env, target, String(form.get("data") || "")));
     if (!site) return json({ recipe });
@@ -117,16 +111,40 @@ async function saveRecipe(env, target, html) {
   const id = String(9999999999999 - Date.now()).padStart(13, "0") + "-" + Math.random().toString(36).slice(2, 7);
   recipe.id = id;
   recipe.addedAt = new Date().toISOString();
+  recipe.made = false;
+  recipe.rating = 0;
 
-  const metadata = {
-    name: recipe.name.slice(0, 200),
-    image: (recipe.image || "").slice(0, 400),
-    site: recipe.site,
-    addedAt: recipe.addedAt,
-  };
-  await env.RECIPES.put("r:" + id, JSON.stringify(recipe), { metadata });
+  await putRecipe(env, recipe);
   await env.RECIPES.put("u:" + target, id);
   return recipe;
+}
+
+async function updateRecipe(request, env, id) {
+  const recipe = await env.RECIPES.get("r:" + id, "json");
+  if (!recipe) throw httpError(404, "Recipe not found");
+  const body = await request.json().catch(() => ({}));
+  if (typeof body.made === "boolean") recipe.made = body.made;
+  if (body.rating !== undefined) {
+    const r = Number(body.rating);
+    if (!Number.isInteger(r) || r < 0 || r > 5) throw httpError(400, "Rating must be 0-5.");
+    recipe.rating = r;
+  }
+  await putRecipe(env, recipe);
+  return json({ recipe });
+}
+
+// The list view reads only KV metadata (max 1024 bytes), so keep a summary there.
+async function putRecipe(env, recipe) {
+  const metadata = {
+    name: recipe.name.slice(0, 120),
+    image: recipe.image || "",
+    site: recipe.site,
+    addedAt: recipe.addedAt,
+    made: !!recipe.made,
+    rating: recipe.rating || 0,
+  };
+  if (new TextEncoder().encode(JSON.stringify(metadata)).length > 1000) metadata.image = "";
+  await env.RECIPES.put("r:" + recipe.id, JSON.stringify(recipe), { metadata });
 }
 
 async function deleteRecipe(env, id) {
@@ -174,7 +192,7 @@ async function fetchPage(target) {
   if (!res.ok) {
     throw httpError(
       502,
-      `That website blocks automatic requests (HTTP ${res.status}). Open the recipe and tap your “Save to Recipe Box” bookmark instead.`
+      `That site won't let us grab its recipes directly (HTTP ${res.status}).`
     );
   }
   return res.text();
@@ -346,16 +364,11 @@ function toArray(v) {
 
 // ---------- helpers ----------
 
-function checkPasscode(request, env) {
-  if (!env.SUBMIT_PASSCODE) return;
-  if (request.headers.get("X-Passcode") !== env.SUBMIT_PASSCODE) throw httpError(401, "Wrong passcode.");
-}
-
 function corsHeaders(env) {
   return {
     "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Passcode",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
