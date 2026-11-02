@@ -185,6 +185,7 @@ function drawGrid() {
       drawGrid();
       try {
         await updateRecipe(r.id, { made });
+        if (made) checkMilestone(r.id);
       } catch (err) {
         r.made = !made;
         drawGrid();
@@ -282,6 +283,7 @@ async function renderRecipe(id) {
         const prev = r.rating;
         r.rating = n === prev ? 0 : n; // tap the same star again to clear
         drawRater();
+        if (r.rating === 5) bubble("🤌 Chef's kiss!");
         try {
           await updateRecipe(r.id, { rating: r.rating });
         } catch (err) {
@@ -299,6 +301,7 @@ async function renderRecipe(id) {
     drawRater();
     try {
       await updateRecipe(r.id, { made: r.made });
+      if (r.made) checkMilestone(r.id);
     } catch (err) {
       r.made = !r.made;
       madeBox.checked = r.made;
@@ -306,6 +309,13 @@ async function renderRecipe(id) {
       alert(err.message);
     }
   });
+
+  const boxes = [...app.querySelectorAll(".ingredients input")];
+  boxes.forEach((b) =>
+    b.addEventListener("change", () => {
+      if (b.checked && boxes.every((x) => x.checked)) bubble("🛒 Shopping done ✓");
+    })
+  );
 
   // Tap a step to mark it done.
   app.querySelectorAll(".steps li").forEach((li) => li.addEventListener("click", () => li.classList.toggle("done")));
@@ -368,3 +378,113 @@ function showBlockedHelp() {
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
+
+// ---------- easter eggs ----------
+
+// A floating message bubble. Centered by default; `random` drops it somewhere on screen.
+function bubble(text, { random = false, ms = 2200 } = {}) {
+  const el = document.createElement("div");
+  el.className = "bubble" + (random ? " roam" : "");
+  el.textContent = text;
+  if (random) {
+    el.style.left = `min(${5 + Math.random() * 65}vw, calc(100vw - 180px))`;
+    el.style.top = 15 + Math.random() * 65 + "vh";
+  }
+  el.addEventListener("click", () => el.remove());
+  document.body.append(el);
+  setTimeout(() => el.classList.add("out"), ms);
+  setTimeout(() => el.remove(), ms + 400);
+}
+
+// Tap the title 5 times quickly: the site becomes the Alaskan Salmon box (and back).
+(() => {
+  const brand = document.querySelector(".brand");
+  let taps = 0, timer;
+  brand.addEventListener("click", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => (taps = 0), 1500);
+    if (++taps < 5) return;
+    taps = 0;
+    const salmon = brand.textContent !== "Alaskan Salmon";
+    brand.textContent = salmon ? "Alaskan Salmon" : "A+M Recipe Box";
+    if (salmon) bubble("🐟");
+  });
+})();
+
+// Milestones for meals made: a one-time celebration at 10, 25, 50, 100.
+async function checkMilestone(justMadeId) {
+  try {
+    const list = cache || (await api()).recipes;
+    // The list can lag a moment behind the save, so count this one regardless.
+    const made = list.filter((r) => r.made || r.id === justMadeId).length;
+    const hit = [10, 25, 50, 100].find((n) => n === made);
+    if (!hit || load("milestone-" + hit, "")) return;
+    save("milestone-" + hit, "1");
+    bubble(`🎉 ${hit} meals made together!`, { ms: 4000 });
+  } catch {}
+}
+
+// Shake the phone: "What should we make tonight?"
+async function randomPick() {
+  try {
+    if (!cache) cache = (await api()).recipes;
+  } catch {
+    return;
+  }
+  const pool = cache.filter((r) => !r.made).length ? cache.filter((r) => !r.made) : cache;
+  if (!pool.length) return;
+  const r = pool[Math.floor(Math.random() * pool.length)];
+  document.querySelector(".pick")?.remove();
+  const el = document.createElement("div");
+  el.className = "pick";
+  el.innerHTML = `
+    <div class="pick-card" role="dialog" aria-label="Random recipe pick">
+      <p class="pick-q">What should we make tonight?</p>
+      ${r.image ? `<img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
+      <h3>${esc(r.name)}</h3>
+      <div class="pick-actions">
+        <a class="btn" href="#/r/${encodeURIComponent(r.id)}">Let's make it</a>
+        <button type="button" class="link-btn again">Pick another</button>
+      </div>
+    </div>`;
+  el.addEventListener("click", (e) => {
+    if (e.target === el || e.target.closest("a")) el.remove();
+    if (e.target.closest(".again")) randomPick();
+  });
+  document.body.append(el);
+}
+
+(() => {
+  let last = null, cooldown = 0;
+  const onMotion = (e) => {
+    const a = e.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    if (last) {
+      const jolt = Math.abs(a.x - last.x) + Math.abs(a.y - last.y) + Math.abs(a.z - last.z);
+      if (jolt > 35 && Date.now() > cooldown) {
+        cooldown = Date.now() + 2500;
+        randomPick();
+      }
+    }
+    last = { x: a.x, y: a.y, z: a.z };
+  };
+  // iPhones only allow motion access after a tap, and ask once.
+  if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+    document.addEventListener(
+      "click",
+      () => DeviceMotionEvent.requestPermission().then((p) => p === "granted" && addEventListener("devicemotion", onMotion)).catch(() => {}),
+      { once: true }
+    );
+  } else {
+    addEventListener("devicemotion", onMotion);
+  }
+})();
+
+// Every so often, a little "I love you!" pops up somewhere.
+(function loveNote() {
+  const wait = (90 + Math.random() * 210) * 1000; // 1.5 to 5 minutes
+  setTimeout(() => {
+    if (!document.hidden) bubble("I love you! ❤️", { random: true, ms: 3500 });
+    loveNote();
+  }, wait);
+})();

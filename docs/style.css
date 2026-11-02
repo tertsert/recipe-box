@@ -187,6 +187,43 @@ button.small { padding: 2px 12px; border-radius: 999px; border: 1px solid var(--
 .link-btn:hover { color: var(--text); }
 .link-btn.danger:hover { color: var(--red); }
 
+/* ---- easter eggs ---- */
+.bubble {
+  position: fixed; left: 50%; bottom: 32px; z-index: 20;
+  transform: translateX(-50%);
+  background: var(--white); color: var(--red);
+  padding: 12px 22px; border-radius: 999px;
+  font-weight: 600; font-size: 1.05rem; white-space: nowrap;
+  box-shadow: 0 6px 24px rgb(0 0 0 / .15);
+  animation: bubble-in .35s cubic-bezier(.3, 1.6, .5, 1);
+  cursor: pointer;
+}
+.bubble.roam { bottom: auto; transform: none; animation: roam-in .45s cubic-bezier(.3, 1.6, .5, 1); }
+.bubble.out { opacity: 0; transition: opacity .4s; }
+@keyframes bubble-in { from { opacity: 0; transform: translate(-50%, 16px) scale(.8); } }
+@keyframes roam-in { from { opacity: 0; transform: scale(.3) rotate(-12deg); } }
+
+.pick {
+  position: fixed; inset: 0; z-index: 30;
+  background: rgb(43 43 43 / .45);
+  display: grid; place-items: center; padding: 16px;
+}
+.pick-card {
+  background: var(--cream); border-radius: 16px; padding: 24px;
+  width: min(360px, 100%); text-align: center;
+  animation: bubble-in-card .3s cubic-bezier(.3, 1.5, .5, 1);
+}
+.pick-q { margin: 0 0 14px; color: var(--muted); font-weight: 500; }
+.pick-card img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; display: block; }
+.pick-card h3 { margin: 14px 0 18px; font-size: 1.3rem; font-weight: 600; }
+.pick-actions { display: flex; justify-content: center; align-items: center; gap: 18px; }
+.pick-actions .btn { text-decoration: none; }
+@keyframes bubble-in-card { from { opacity: 0; transform: scale(.85); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble, .pick-card { animation: none; }
+}
+
 @media print {
   body { background: #fff; }
   .no-print, .top, .hero-img { display: none !important; }
