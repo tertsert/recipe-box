@@ -220,8 +220,59 @@ button.small { padding: 2px 12px; border-radius: 999px; border: 1px solid var(--
 .pick-actions .btn { text-decoration: none; }
 @keyframes bubble-in-card { from { opacity: 0; transform: scale(.85); } }
 
+.heart { width: 1em; height: 1em; vertical-align: -.15em; fill: currentColor; }
+
+/* confetti rain (5 stars) */
+.rain { position: fixed; inset: 0; pointer-events: none; z-index: 40; overflow: hidden; }
+.rain i {
+  position: absolute; top: -20px; height: 10px; border-radius: 2px;
+  animation: fall var(--d) cubic-bezier(.3, .2, .6, 1) var(--delay) both;
+}
+@keyframes fall {
+  from { transform: translate(0, 0) rotate(0); }
+  to { transform: translate(var(--sway), 110vh) rotate(var(--spin)); }
+}
+
+/* the footer fish */
+.foot { display: flex; justify-content: center; padding: 8px 16px 28px; }
+.fish-btn { border: 0; background: none; padding: 6px; width: 46px; opacity: .55; transition: opacity .2s; }
+.fish-btn:hover { opacity: 1; }
+.fish-btn svg { display: block; width: 100%; animation: wiggle 9s ease-in-out infinite; transform-origin: 40% 50%; }
+.fish-body, .fish-tail { fill: var(--orange); }
+.fish-fin { fill: #e07b22; }
+.fish-eye { fill: var(--text); }
+@keyframes wiggle {
+  0%, 88%, 100% { transform: rotate(0); }
+  91% { transform: rotate(-12deg); }
+  94% { transform: rotate(10deg); }
+  97% { transform: rotate(-5deg); }
+}
+
+/* salmon run */
+.run { position: fixed; inset: 0; pointer-events: none; z-index: 25; overflow: hidden; }
+.leaper {
+  position: absolute; left: 0; bottom: var(--y); width: var(--s);
+  animation: swim var(--d) linear var(--delay) both;
+}
+.leaper .hop { display: block; animation: hop var(--d) var(--delay) both; }
+.leaper svg { display: block; width: 100%; transform: scaleX(-1); } /* face right */
+@keyframes swim {
+  from { transform: translateX(-120px); }
+  to { transform: translateX(calc(100vw + 120px)); }
+}
+@keyframes hop {
+  0% { transform: translateY(0) rotate(-35deg); animation-timing-function: cubic-bezier(.2, .7, .4, 1); }
+  50% { transform: translateY(calc(var(--h) * -1)) rotate(0); animation-timing-function: cubic-bezier(.6, 0, .8, .3); }
+  100% { transform: translateY(0) rotate(35deg); }
+}
+
+.salmon-card h2 { color: var(--red); font-size: 1.9rem; font-weight: 700; margin: 6px 0 6px; }
+.salmon-card p { margin: 0 0 20px; font-size: 1.1rem; }
+.salmon-fish { width: 90px; margin: 0 auto; }
+.salmon-fish svg { display: block; width: 100%; transform: scaleX(-1); animation: wiggle 2.4s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
-  .bubble, .pick-card { animation: none; }
+  .bubble, .pick-card, .fish-btn svg, .salmon-fish svg { animation: none; }
 }
 
 @media print {

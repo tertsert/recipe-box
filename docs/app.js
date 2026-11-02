@@ -283,7 +283,7 @@ async function renderRecipe(id) {
         const prev = r.rating;
         r.rating = n === prev ? 0 : n; // tap the same star again to clear
         drawRater();
-        if (r.rating === 5) bubble("🤌 Chef's kiss!");
+        if (r.rating === 5) confettiRain();
         try {
           await updateRecipe(r.id, { rating: r.rating });
         } catch (err) {
@@ -313,7 +313,7 @@ async function renderRecipe(id) {
   const boxes = [...app.querySelectorAll(".ingredients input")];
   boxes.forEach((b) =>
     b.addEventListener("change", () => {
-      if (b.checked && boxes.every((x) => x.checked)) bubble("🛒 Shopping done ✓");
+      if (b.checked && boxes.every((x) => x.checked)) bubble("Shopping done ✓");
     })
   );
 
@@ -382,10 +382,10 @@ function esc(s) {
 // ---------- easter eggs ----------
 
 // A floating message bubble. Centered by default; `random` drops it somewhere on screen.
-function bubble(text, { random = false, ms = 2200 } = {}) {
+function bubble(text, { random = false, ms = 2200, html = false } = {}) {
   const el = document.createElement("div");
   el.className = "bubble" + (random ? " roam" : "");
-  el.textContent = text;
+  el[html ? "innerHTML" : "textContent"] = text;
   if (random) {
     el.style.left = `min(${5 + Math.random() * 65}vw, calc(100vw - 180px))`;
     el.style.top = 15 + Math.random() * 65 + "vh";
@@ -396,20 +396,66 @@ function bubble(text, { random = false, ms = 2200 } = {}) {
   setTimeout(() => el.remove(), ms + 400);
 }
 
-// Tap the title 5 times quickly: the site becomes the Alaskan Salmon box (and back).
+const HEART = `<svg class="heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.4 8.4 2.2 4.5 6 4.5c2.3 0 3.6 1.3 4.5 2.6.3.4.9.4 1.2 0 .9-1.3 2.2-2.6 4.5-2.6 3.8 0 5.6 3.9 4 7.2C19.5 16.4 12 21 12 21z"/></svg>`;
+const FISH = `<svg viewBox="0 0 64 32" aria-hidden="true"><path class="fish-tail" d="M50 16 63 5v22z"/><ellipse class="fish-body" cx="28" cy="16" rx="25" ry="11"/><path class="fish-fin" d="M22 6c4-5 12-5 15 0z"/><circle class="fish-eye" cx="13" cy="13" r="2.4"/></svg>`;
+
+// Confetti rains down the whole screen (5-star ratings).
+function confettiRain() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const layer = document.createElement("div");
+  layer.className = "rain";
+  const colors = ["#1c77c3", "#39a9db", "#40bcd8", "#f39237", "#d63230"];
+  for (let i = 0; i < 140; i++) {
+    const bit = document.createElement("i");
+    bit.style.cssText = `left:${Math.random() * 100}vw;background:${colors[i % colors.length]};--d:${2 + Math.random() * 1.6}s;--delay:${Math.random() * 0.9}s;--sway:${Math.random() * 120 - 60}px;--spin:${Math.random() * 1080 - 540}deg;width:${6 + Math.random() * 6}px`;
+    layer.append(bit);
+  }
+  document.body.append(layer);
+  setTimeout(() => layer.remove(), 4800);
+}
+
+// The little fish in the footer: a salmon run, then a note for Alaskan Salmon.
 (() => {
-  const brand = document.querySelector(".brand");
-  let taps = 0, timer;
-  brand.addEventListener("click", () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => (taps = 0), 1500);
-    if (++taps < 5) return;
-    taps = 0;
-    const salmon = brand.textContent !== "Alaskan Salmon";
-    brand.textContent = salmon ? "Alaskan Salmon" : "A+M Recipe Box";
-    if (salmon) bubble("🐟");
+  const btn = document.getElementById("fish");
+  btn.innerHTML = FISH;
+  btn.addEventListener("click", () => {
+    if (document.querySelector(".run")) return;
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduced) {
+      const run = document.createElement("div");
+      run.className = "run";
+      for (let i = 0; i < 16; i++) {
+        const f = document.createElement("span");
+        f.className = "leaper";
+        const size = 40 + Math.random() * 50;
+        f.style.cssText = `--s:${size}px;--y:${Math.random() * 30 - 8}vh;--h:${25 + Math.random() * 40}vh;--d:${1.6 + Math.random() * 1.2}s;--delay:${i * 0.12 + Math.random() * 0.3}s`;
+        f.innerHTML = `<span class="hop">${FISH}</span>`;
+        run.append(f);
+      }
+      document.body.append(run);
+      setTimeout(() => run.remove(), 5200);
+    }
+    setTimeout(showSalmonNote, reduced ? 0 : 2600);
   });
 })();
+
+function showSalmonNote() {
+  const el = document.createElement("div");
+  el.className = "pick";
+  el.innerHTML = `
+    <div class="pick-card salmon-card" role="dialog" aria-label="A note for Alaskan Salmon">
+      <div class="salmon-fish">${FISH}</div>
+      <h2>Hey, Alaskan Salmon</h2>
+      <p>You're my favorite catch.</p>
+      <button type="button" class="btn">Love you too ${HEART}</button>
+    </div>`;
+  el.addEventListener("click", (e) => {
+    if (e.target !== el && !e.target.closest("button")) return;
+    el.remove();
+    document.querySelector(".brand").textContent = "Alaskan Salmon's Recipe Box";
+  });
+  document.body.append(el);
+}
 
 // Milestones for meals made: a one-time celebration at 10, 25, 50, 100.
 async function checkMilestone(justMadeId) {
@@ -420,7 +466,7 @@ async function checkMilestone(justMadeId) {
     const hit = [10, 25, 50, 100].find((n) => n === made);
     if (!hit || load("milestone-" + hit, "")) return;
     save("milestone-" + hit, "1");
-    bubble(`🎉 ${hit} meals made together!`, { ms: 4000 });
+    bubble(`${hit} meals made together!`, { ms: 4000 });
   } catch {}
 }
 
@@ -484,7 +530,7 @@ async function randomPick() {
 (function loveNote() {
   const wait = (90 + Math.random() * 210) * 1000; // 1.5 to 5 minutes
   setTimeout(() => {
-    if (!document.hidden) bubble("I love you! ❤️", { random: true, ms: 3500 });
+    if (!document.hidden) bubble(`I love you! ${HEART}`, { random: true, ms: 3500, html: true });
     loveNote();
   }, wait);
 })();
