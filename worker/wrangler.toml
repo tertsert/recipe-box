@@ -4,9 +4,9 @@ compatibility_date = "2026-10-01"
 
 [vars]
 # Set to your GitHub Pages origin, e.g. "https://yourname.github.io" (no trailing slash).
-ALLOWED_ORIGIN = "*"
+ALLOWED_ORIGIN = "https://tertsert.github.io"
 # Full URL of the GitHub Pages site, e.g. "https://yourname.github.io/recipe-box".
-SITE_URL = ""
+SITE_URL = "https://tertsert.github.io/recipe-box"
 
 [[kv_namespaces]]
 binding = "RECIPES"

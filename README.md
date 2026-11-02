@@ -26,8 +26,8 @@ worker/    the API (a Cloudflare Worker + KV storage)
 2. **Workers & Pages → Create → Worker** → name it `recipe-box-api` → Deploy → **Edit code**, replace everything with `worker/worker.js`, Deploy.
 3. Worker → **Settings → Bindings → Add → KV namespace**: variable name `RECIPES`, namespace `RECIPES`.
 4. Worker → **Settings → Variables and Secrets**, add:
-   - `SITE_URL` (text) = `https://YOUR-GITHUB-USERNAME.github.io/recipe-box`
-   - `ALLOWED_ORIGIN` (text) = `https://YOUR-GITHUB-USERNAME.github.io`
+   - `SITE_URL` (text) = `https://tertsert.github.io/recipe-box`
+   - `ALLOWED_ORIGIN` (text) = `https://tertsert.github.io`
    - `SUBMIT_PASSCODE` (secret, optional but recommended) = a word you'll share with your friend
 5. Note the worker URL, e.g. `https://recipe-box-api.YOUR-SUBDOMAIN.workers.dev`.
 
@@ -46,7 +46,7 @@ Edit `docs/config.js` and set `window.RECIPE_API` to the worker URL from step 2.
 
 ### 4. Turn on GitHub Pages
 Repo → **Settings → Pages** → Source: **Deploy from a branch** → Branch `main`, folder **`/docs`** → Save.
-After a minute the site is live at `https://YOUR-GITHUB-USERNAME.github.io/recipe-box/`.
+After a minute the site is live at `https://tertsert.github.io/recipe-box/`.
 
 ### 5. Share it
 Send your friend the link (and the passcode, if you set one). The first time she saves a recipe the site asks for the passcode and remembers it on that device. She should do that *before* setting up the bookmark button, so the button carries the passcode too.
