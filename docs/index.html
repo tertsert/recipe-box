@@ -6,56 +6,55 @@
   <title>Recipe Box</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍲</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Bump ?v= when these files change so phones don't keep an old copy. -->
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
   <header class="top">
-    <div class="top-inner">
-      <a href="#/" class="brand"><span class="brand-pot" aria-hidden="true">🍲</span> Recipe Box</a>
-      <form id="add-form" class="add" autocomplete="off">
-        <input id="url" type="url" inputmode="url" placeholder="Paste a recipe link…" required aria-label="Recipe link">
-        <button type="submit">Add</button>
-      </form>
-      <div id="add-status" class="status" role="status"></div>
-    </div>
-    <svg class="wave" viewBox="0 0 1440 40" preserveAspectRatio="none" aria-hidden="true"><path d="M0 20c120 18 240 18 360 0s240-18 360 0 240 18 360 0 240-18 360 0v20H0z"/></svg>
+    <a href="#/" class="brand">Recipe Box</a>
   </header>
 
   <main id="app"></main>
 
   <template id="home-tpl">
-    <div class="toolbar">
-      <div class="pills" role="tablist" aria-label="Filter recipes">
-        <button type="button" class="pill" data-filter="all" role="tab">All <span class="count"></span></button>
-        <button type="button" class="pill" data-filter="todo" role="tab">To try <span class="count"></span></button>
-        <button type="button" class="pill" data-filter="made" role="tab">Made it <span class="count"></span></button>
+    <section class="hero">
+      <h1>Our Recipes</h1>
+      <form id="add-form" class="add" autocomplete="off">
+        <input id="url" type="url" inputmode="url" placeholder="Paste a recipe link" required aria-label="Recipe link">
+        <button type="submit" class="btn">Add recipe</button>
+      </form>
+      <div id="add-status" class="status" role="status"></div>
+    </section>
+
+    <div class="filters">
+      <div class="tabs" role="tablist" aria-label="Filter recipes">
+        <button type="button" class="tab" data-filter="all" role="tab">All <span class="count"></span></button>
+        <button type="button" class="tab" data-filter="todo" role="tab">To try <span class="count"></span></button>
+        <button type="button" class="tab" data-filter="made" role="tab">Made it <span class="count"></span></button>
       </div>
-      <div class="tools">
-        <input id="search" type="search" placeholder="Search…" aria-label="Search recipes">
-        <select id="sort" aria-label="Sort recipes">
-          <option value="new">Newest</option>
-          <option value="rating">Top rated</option>
-          <option value="name">A–Z</option>
-        </select>
-      </div>
+      <input id="search" class="box" type="search" placeholder="Search recipes" aria-label="Search recipes">
+      <select id="sort" class="box" aria-label="Sort recipes">
+        <option value="new">Newest</option>
+        <option value="rating">Top rated</option>
+        <option value="name">A–Z</option>
+      </select>
     </div>
+
     <div id="grid" class="grid"></div>
   </template>
 
   <template id="blocked-tpl">
     <div class="blocked">
-      <p>No problem: use the bookmark button. Tap it while you're on the recipe page and it'll land here.</p>
+      <p>Use the bookmark button instead. Tap it while you're on the recipe page and it'll land here.</p>
       <ol>
-        <li><strong>Computer:</strong> drag this to your bookmarks bar → <a class="bm-button" href="#">🍲 Save to Recipe Box</a></li>
+        <li><strong>Computer:</strong> drag this to your bookmarks bar: <a class="bm-button" href="#">Save to Recipe Box</a></li>
         <li><strong>Phone:</strong> bookmark any page, edit it, and paste this as the address: <button type="button" class="bm-copy small">Copy code</button></li>
       </ol>
     </div>
   </template>
 
-  <div id="confetti" aria-hidden="true"></div>
-
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script src="config.js?v=4"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

@@ -20,43 +20,15 @@ async function updateRecipe(id, changes) {
   return recipe;
 }
 
+function summarize(r) {
+  return { id: r.id, name: r.name, image: r.image, site: r.site, addedAt: r.addedAt, made: !!r.made, rating: r.rating || 0 };
+}
+
 function load(key, fallback) {
   try { return localStorage.getItem("rb-" + key) || fallback; } catch { return fallback; }
 }
 function save(key, value) {
   try { localStorage.setItem("rb-" + key, value); } catch {}
-}
-
-// ---------- add form (lives in the header) ----------
-
-const form = document.getElementById("add-form");
-const input = document.getElementById("url");
-const status = document.getElementById("add-status");
-
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const button = form.querySelector("button");
-  button.disabled = true;
-  button.textContent = "Adding…";
-  setStatus("");
-  try {
-    const { recipe, duplicate } = await api("", { method: "POST", body: JSON.stringify({ url: input.value }) });
-    cache = null;
-    input.value = "";
-    if (duplicate) setStatus("Already in the box — here it is!");
-    location.hash = "#/r/" + encodeURIComponent(recipe.id);
-  } catch (err) {
-    setStatus(err.message, true);
-    if (/won't let us/i.test(err.message)) showBlockedHelp();
-  } finally {
-    button.disabled = false;
-    button.textContent = "Add";
-  }
-});
-
-function setStatus(text, isError) {
-  status.className = "status" + (isError ? " error" : "");
-  status.textContent = text;
 }
 
 // ---------- routing ----------
@@ -83,12 +55,13 @@ async function renderHome() {
   const search = document.getElementById("search");
   const sort = document.getElementById("sort");
 
+  setupAddForm();
   search.value = view.query;
   sort.value = view.sort;
   search.addEventListener("input", () => { view.query = search.value; drawGrid(); });
   sort.addEventListener("change", () => { view.sort = sort.value; save("sort", view.sort); drawGrid(); });
-  app.querySelectorAll(".pill").forEach((p) =>
-    p.addEventListener("click", () => { view.filter = p.dataset.filter; save("filter", view.filter); drawGrid(); })
+  app.querySelectorAll(".tab").forEach((t) =>
+    t.addEventListener("click", () => { view.filter = t.dataset.filter; save("filter", view.filter); drawGrid(); })
   );
 
   // The bookmarklet import redirects here with ?error=… if something failed.
@@ -98,7 +71,10 @@ async function renderHome() {
   if (!cache) {
     grid.innerHTML = `<p class="empty">Loading…</p>`;
     try {
-      cache = (await api()).recipes;
+      const fresh = (await api()).recipes;
+      // Cloudflare's list can lag a minute behind; keep anything we just added.
+      const pending = JSON.parse(sessionStorage.getItem("rb-added") || "[]").filter((p) => !fresh.some((r) => r.id === p.id));
+      cache = [...pending, ...fresh];
     } catch (e) {
       grid.innerHTML = `<p class="empty error">Couldn't load recipes: ${esc(e.message)}</p>`;
       return;
@@ -107,17 +83,55 @@ async function renderHome() {
   drawGrid();
 }
 
+function setupAddForm() {
+  const form = document.getElementById("add-form");
+  const input = document.getElementById("url");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const button = form.querySelector("button");
+    button.disabled = true;
+    button.textContent = "Adding…";
+    setStatus("");
+    try {
+      const { recipe, duplicate } = await api("", { method: "POST", body: JSON.stringify({ url: input.value }) });
+      if (!duplicate) rememberAdded(recipe);
+      location.hash = "#/r/" + encodeURIComponent(recipe.id);
+    } catch (err) {
+      setStatus(err.message, true);
+      if (/won't let us/i.test(err.message)) showBlockedHelp();
+      button.disabled = false;
+      button.textContent = "Add recipe";
+    }
+  });
+}
+
+function rememberAdded(recipe) {
+  const s = summarize(recipe);
+  if (cache) cache.unshift(s);
+  try {
+    const list = JSON.parse(sessionStorage.getItem("rb-added") || "[]");
+    sessionStorage.setItem("rb-added", JSON.stringify([s, ...list].slice(0, 20)));
+  } catch {}
+}
+
+function setStatus(text, isError) {
+  const status = document.getElementById("add-status");
+  if (!status) return;
+  status.className = "status" + (isError ? " error" : "");
+  status.textContent = text;
+}
+
 function drawGrid() {
   const grid = document.getElementById("grid");
   if (!grid) return;
 
   const counts = { all: cache.length, made: cache.filter((r) => r.made).length };
   counts.todo = counts.all - counts.made;
-  app.querySelectorAll(".pill").forEach((p) => {
-    const on = p.dataset.filter === view.filter;
-    p.classList.toggle("active", on);
-    p.setAttribute("aria-selected", on);
-    p.querySelector(".count").textContent = counts[p.dataset.filter];
+  app.querySelectorAll(".tab").forEach((t) => {
+    const on = t.dataset.filter === view.filter;
+    t.classList.toggle("active", on);
+    t.setAttribute("aria-selected", on);
+    t.querySelector(".count").textContent = counts[t.dataset.filter];
   });
 
   const q = view.query.trim().toLowerCase();
@@ -131,39 +145,34 @@ function drawGrid() {
     });
 
   if (!cache.length) {
-    grid.innerHTML = `<p class="empty"><span class="big">🥄</span>The box is empty. Paste a recipe link up top to add the first one!</p>`;
+    grid.innerHTML = `<p class="empty">No recipes yet. Paste a link above to add the first one.</p>`;
     return;
   }
   if (!list.length) {
     const msg = q
       ? `Nothing matches “${esc(view.query)}”.`
       : view.filter === "made"
-        ? "Nothing made yet. Time to cook something!"
-        : "You've made everything. Go find something new!";
+        ? "Nothing made yet."
+        : "You've made everything on the list.";
     grid.innerHTML = `<p class="empty">${msg}</p>`;
     return;
   }
 
   grid.innerHTML = list
     .map(
-      (r, i) => `
-      <div class="card${r.made ? " is-made" : ""}" style="--i:${i % 5}">
+      (r) => `
+      <div class="card">
         <a class="card-link" href="#/r/${encodeURIComponent(r.id)}">
           <div class="thumb">
             ${r.image ? `<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
-            ${r.made ? `<span class="badge">✓ Made it</span>` : ""}
+            ${r.made ? `<span class="badge">Made it</span>` : ""}
           </div>
-          <div class="card-body">
-            <h3>${esc(r.name)}</h3>
-            <p class="site">${esc(r.site || "")}</p>
-          </div>
+          <h3>${esc(r.name)}</h3>
         </a>
-        <div class="card-foot">
-          <button type="button" class="made-chip" data-id="${esc(r.id)}" aria-pressed="${!!r.made}">
-            ${r.made ? "✓ Made" : "Mark made"}
-          </button>
-          ${r.made && r.rating ? `<span class="stars-mini" aria-label="${r.rating} out of 5 stars">${starText(r.rating)}</span>` : ""}
-        </div>
+        ${r.made && r.rating ? `<div class="stars-mini" aria-label="${r.rating} out of 5 stars">${starText(r.rating)}</div>` : ""}
+        <button type="button" class="made-chip" data-id="${esc(r.id)}" aria-pressed="${!!r.made}">
+          ${r.made ? "✓ Made" : "Mark as made"}
+        </button>
       </div>`
     )
     .join("");
@@ -172,7 +181,6 @@ function drawGrid() {
     btn.addEventListener("click", async () => {
       const r = cache.find((x) => x.id === btn.dataset.id);
       const made = !r.made;
-      if (made) confetti(btn);
       r.made = made; // optimistic
       drawGrid();
       try {
@@ -201,28 +209,29 @@ async function renderRecipe(id) {
     app.innerHTML = `<p class="empty error">${esc(err.message)}</p><p class="empty"><a href="#/">← Back to recipes</a></p>`;
     return;
   }
+  // Covers recipes added through the bookmarklet, which lands straight here.
+  if (cache && !cache.some((x) => x.id === r.id)) rememberAdded(r);
 
   const times = [
-    ["⏱ Prep", r.prepTime],
-    ["🔥 Cook", r.cookTime],
-    ["⏰ Total", r.totalTime],
-    ["🍽 Makes", r.yield],
+    ["Prep", r.prepTime],
+    ["Cook", r.cookTime],
+    ["Total", r.totalTime],
+    ["Makes", r.yield],
   ].filter(([, v]) => v);
 
   document.title = r.name + " · Recipe Box";
   app.innerHTML = `
     <article class="recipe">
       <a href="#/" class="back no-print">← All recipes</a>
-      ${r.image ? `<img class="hero" src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
       <h1>${esc(r.name)}</h1>
-      ${times.length ? `<ul class="chips">${times.map(([k, v]) => `<li><span>${k}</span> ${esc(v)}</li>`).join("")}</ul>` : ""}
-      <p class="from">From <a href="${esc(r.source)}" target="_blank" rel="noopener">${esc(r.site)}</a></p>
+      ${times.length ? `<dl class="meta">${times.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>` : ""}
+      ${r.image ? `<img class="hero-img" src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
 
-      <section class="status-panel no-print" aria-label="Your notes">
+      <section class="status-panel no-print" aria-label="Made it and rating">
         <label class="switch">
           <input type="checkbox" id="made" role="switch" ${r.made ? "checked" : ""}>
           <span class="track" aria-hidden="true"><span class="knob"></span></span>
-          <span class="switch-label">We've made this</span>
+          <span>We've made this</span>
         </label>
         <div class="rater" role="radiogroup" aria-label="Rating"></div>
       </section>
@@ -236,7 +245,7 @@ async function renderRecipe(id) {
         </section>
 
         <section class="steps">
-          <h2>Steps</h2>
+          <h2>Directions</h2>
           ${r.instructions
             .map(
               (s) => `
@@ -248,8 +257,10 @@ async function renderRecipe(id) {
       </div>
 
       <footer class="actions no-print">
-        <button type="button" id="print" class="ghost">🖨 Print</button>
-        <button type="button" id="delete" class="ghost danger">Delete</button>
+        <a href="${esc(r.source)}" target="_blank" rel="noopener">View original on ${esc(r.site)}</a>
+        <span class="spacer"></span>
+        <button type="button" id="print" class="link-btn">Print</button>
+        <button type="button" id="delete" class="link-btn danger">Delete</button>
       </footer>
     </article>`;
 
@@ -257,22 +268,20 @@ async function renderRecipe(id) {
   const rater = app.querySelector(".rater");
 
   const drawRater = () => {
-    rater.classList.toggle("locked", !r.made);
     rater.innerHTML = r.made
       ? [1, 2, 3, 4, 5]
           .map(
             (n) =>
               `<button type="button" class="star${n <= r.rating ? " on" : ""}" role="radio" aria-checked="${n === r.rating}" aria-label="${n} star${n > 1 ? "s" : ""}" data-n="${n}">★</button>`
           )
-          .join("") + `<span class="rater-hint">${r.rating ? ["", "Meh", "Okay", "Good", "Great", "Amazing!"][r.rating] : "Rate it!"}</span>`
-      : `<span class="rater-hint">Make it, then rate it ⭐</span>`;
+          .join("")
+      : `<span class="hint">Rate it after you make it</span>`;
     rater.querySelectorAll(".star").forEach((b) =>
       b.addEventListener("click", async () => {
         const n = Number(b.dataset.n);
         const prev = r.rating;
         r.rating = n === prev ? 0 : n; // tap the same star again to clear
         drawRater();
-        if (r.rating) rater.querySelector(`[data-n="${r.rating}"]`).classList.add("pop");
         try {
           await updateRecipe(r.id, { rating: r.rating });
         } catch (err) {
@@ -287,7 +296,6 @@ async function renderRecipe(id) {
 
   madeBox.addEventListener("change", async () => {
     r.made = madeBox.checked;
-    if (r.made) confetti(madeBox.parentElement);
     drawRater();
     try {
       await updateRecipe(r.id, { made: r.made });
@@ -306,7 +314,11 @@ async function renderRecipe(id) {
     if (!confirm(`Delete “${r.name}”?`)) return;
     try {
       await api("/" + encodeURIComponent(id), { method: "DELETE" });
-      cache = null;
+      if (cache) cache = cache.filter((x) => x.id !== id);
+      try {
+        const list = JSON.parse(sessionStorage.getItem("rb-added") || "[]");
+        sessionStorage.setItem("rb-added", JSON.stringify(list.filter((x) => x.id !== id)));
+      } catch {}
       location.hash = "#/";
     } catch (err) {
       alert(err.message);
@@ -350,24 +362,7 @@ function showBlockedHelp() {
       prompt("Copy this code:", bookmarkletCode());
     }
   });
-  status.append(help);
-}
-
-// ---------- fun ----------
-
-function confetti(origin) {
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  const layer = document.getElementById("confetti");
-  const box = origin.getBoundingClientRect();
-  const colors = ["#1c77c3", "#39a9db", "#40bcd8", "#f39237", "#d63230"];
-  for (let i = 0; i < 28; i++) {
-    const bit = document.createElement("i");
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 60 + Math.random() * 90;
-    bit.style.cssText = `left:${box.left + box.width / 2}px;top:${box.top + box.height / 2}px;background:${colors[i % 5]};--dx:${Math.cos(angle) * dist}px;--dy:${Math.sin(angle) * dist - 40}px;--r:${Math.random() * 720 - 360}deg`;
-    layer.append(bit);
-    setTimeout(() => bit.remove(), 900);
-  }
+  document.getElementById("add-status").append(help);
 }
 
 function esc(s) {
