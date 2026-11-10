@@ -510,125 +510,154 @@ async function renderCart() {
     await Promise.all(ids.map((id) => api("/" + encodeURIComponent(id)).then((d) => d.recipe).catch(() => null)))
   ).filter(Boolean);
 
-  const have = pantryMatcher(pantry);
-  const toBuy = [];
-  const covered = [];
-  for (const r of recipes) {
-    r.ingredients.forEach((text, n) => {
-      const item = { key: `${r.id}|${n}`, text, recipe: r };
-      const match = have(text);
-      if (match) covered.push({ ...item, match });
-      else toBuy.push(item);
-    });
-  }
-
+  const matcher = pantryMatcher(pantry);
+  // Your own calls ("we have this" / "we need this") beat the automatic match.
+  const overrides = JSON.parse(load("pantry-overrides", "{}"));
   const checked = new Set(JSON.parse(load("shop-checked", "[]")));
   const saveChecked = () => save("shop-checked", JSON.stringify([...checked]));
 
-  const groups = recipes
-    .map((r) => {
-      const items = toBuy.filter((i) => i.recipe === r);
-      if (!items.length) return "";
-      return `
-        <h3>${esc(r.name)}</h3>
-        <ul class="shop">${items
-          .map(
-            (i) =>
-              `<li><label><input type="checkbox" data-key="${esc(i.key)}" ${checked.has(i.key) ? "checked" : ""}><span>${esc(i.text)}</span></label></li>`
-          )
-          .join("")}</ul>`;
-    })
-    .join("");
+  const draw = () => {
+    const toBuy = [];
+    const covered = [];
+    for (const r of recipes) {
+      r.ingredients.forEach((text, n) => {
+        const item = { key: `${r.id}|${n}`, text, recipe: r, ikey: ingredientKey(text) };
+        const choice = overrides[item.ikey];
+        const match = choice === "need" ? null : choice === "have" ? "you said you have it" : matcher(text);
+        if (match) covered.push({ ...item, match });
+        else toBuy.push({ ...item, forced: choice === "need" });
+      });
+    }
 
-  app.innerHTML = `
-    <section class="page-head">
-      <h1>This Week's Cart</h1>
-      <p class="lede">${recipes.length} recipe${recipes.length === 1 ? "" : "s"} planned · ${toBuy.length} thing${toBuy.length === 1 ? "" : "s"} to buy</p>
-    </section>
-
-    <ul class="cart-recipes">
-      ${recipes
-        .map(
-          (r) => `
-        <li>
-          <a href="#/r/${encodeURIComponent(r.id)}">
-            <span class="mini-thumb">${r.image ? `<img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}</span>
-            <span class="name">${esc(r.name)}</span>
-          </a>
-          <button type="button" class="link-btn remove" data-id="${esc(r.id)}">Remove</button>
-        </li>`
-        )
-        .join("")}
-    </ul>
-
-    <section class="shopping">
-      <div class="panel-head">
-        <h2>Shopping list</h2>
-        <div class="panel-actions">
-          <button type="button" id="copy-list" class="link-btn">Copy list</button>
-          <button type="button" id="uncheck-list" class="link-btn">Uncheck all</button>
-          <button type="button" id="clear-cart" class="link-btn danger">Empty cart</button>
-        </div>
-      </div>
-      ${groups || `<p class="hint">Everything's already in the pantry.</p>`}
-      ${
-        covered.length
-          ? `<details class="covered">
-        <summary>Already in the pantry (${covered.length})</summary>
-        <ul>${covered.map((i) => `<li>${esc(i.text)} <span class="tag">${esc(i.match)}</span></li>`).join("")}</ul>
-      </details>`
-          : ""
-      }
-    </section>`;
-
-  app.querySelectorAll(".shop input").forEach((box) =>
-    box.addEventListener("change", () => {
-      box.checked ? checked.add(box.dataset.key) : checked.delete(box.dataset.key);
-      saveChecked();
-    })
-  );
-  document.getElementById("uncheck-list").addEventListener("click", () => {
-    checked.clear();
-    saveChecked();
-    app.querySelectorAll(".shop input").forEach((b) => (b.checked = false));
-  });
-  document.getElementById("copy-list").addEventListener("click", async (e) => {
-    const lines = recipes
+    const groups = recipes
       .map((r) => {
-        const items = toBuy.filter((i) => i.recipe === r && !checked.has(i.key));
-        return items.length ? `${r.name}\n${items.map((i) => "- " + i.text).join("\n")}` : "";
+        const items = toBuy.filter((i) => i.recipe === r);
+        if (!items.length) return "";
+        return `
+          <h3>${esc(r.name)}</h3>
+          <ul class="shop">${items
+            .map(
+              (i) => `
+            <li>
+              <label><input type="checkbox" data-key="${esc(i.key)}" ${checked.has(i.key) ? "checked" : ""}><span>${esc(i.text)}</span></label>
+              <button type="button" class="mini-btn" data-ikey="${esc(i.ikey)}" data-set="have">Have it</button>
+            </li>`
+            )
+            .join("")}</ul>`;
       })
-      .filter(Boolean)
-      .join("\n\n");
-    try {
-      await navigator.clipboard.writeText(lines);
-      e.target.textContent = "Copied!";
-      setTimeout(() => (e.target.textContent = "Copy list"), 1500);
-    } catch {
-      prompt("Copy this list:", lines);
-    }
-  });
-  document.getElementById("clear-cart").addEventListener("click", async () => {
-    if (!confirm("Empty this week's cart?")) return;
-    checked.clear();
-    saveChecked();
-    try {
-      await changeShared("cart", () => []);
-    } catch (err) {
-      alert(err.message);
-    }
-    renderCart();
-  });
-  app.querySelectorAll(".cart-recipes .remove").forEach((b) =>
-    b.addEventListener("click", async () => {
+      .join("");
+
+    app.innerHTML = `
+      <section class="page-head">
+        <h1>This Week's Cart</h1>
+        <p class="lede">${recipes.length} recipe${recipes.length === 1 ? "" : "s"} planned · ${toBuy.length} thing${toBuy.length === 1 ? "" : "s"} to buy</p>
+      </section>
+
+      <ul class="cart-recipes">
+        ${recipes
+          .map(
+            (r) => `
+          <li>
+            <a href="#/r/${encodeURIComponent(r.id)}">
+              <span class="mini-thumb">${r.image ? `<img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}</span>
+              <span class="name">${esc(r.name)}</span>
+            </a>
+            <button type="button" class="link-btn remove" data-id="${esc(r.id)}">Remove</button>
+          </li>`
+          )
+          .join("")}
+      </ul>
+
+      <section class="shopping">
+        <div class="panel-head">
+          <h2>Shopping list</h2>
+          <div class="panel-actions">
+            <button type="button" id="copy-list" class="link-btn">Copy list</button>
+            <button type="button" id="uncheck-list" class="link-btn">Uncheck all</button>
+            <button type="button" id="clear-cart" class="link-btn danger">Empty cart</button>
+          </div>
+        </div>
+        ${groups || `<p class="hint">Everything's already in the pantry.</p>`}
+        ${
+          covered.length
+            ? `<details class="covered"${load("covered-open", "") ? " open" : ""}>
+          <summary>Already in the pantry (${covered.length})</summary>
+          <ul>${covered
+            .map(
+              (i) => `
+            <li>
+              <span>${esc(i.text)} <span class="tag">${esc(i.match)}</span></span>
+              <button type="button" class="mini-btn" data-ikey="${esc(i.ikey)}" data-set="need">Need it</button>
+            </li>`
+            )
+            .join("")}</ul>
+        </details>`
+            : ""
+        }
+      </section>`;
+
+    app.querySelector(".covered")?.addEventListener("toggle", (e) => save("covered-open", e.target.open ? "1" : ""));
+    app.querySelectorAll(".mini-btn").forEach((b) =>
+      b.addEventListener("click", () => {
+        const auto = matcher(recipes.flatMap((r) => r.ingredients).find((t) => ingredientKey(t) === b.dataset.ikey) || "");
+        // Only remember a choice when it differs from what the matcher would say.
+        if ((b.dataset.set === "have") === !!auto) delete overrides[b.dataset.ikey];
+        else overrides[b.dataset.ikey] = b.dataset.set;
+        save("pantry-overrides", JSON.stringify(overrides));
+        draw();
+      })
+    );
+    app.querySelectorAll(".shop input").forEach((box) =>
+      box.addEventListener("change", () => {
+        box.checked ? checked.add(box.dataset.key) : checked.delete(box.dataset.key);
+        saveChecked();
+      })
+    );
+    document.getElementById("uncheck-list").addEventListener("click", () => {
+      checked.clear();
+      saveChecked();
+      app.querySelectorAll(".shop input").forEach((b) => (b.checked = false));
+    });
+    document.getElementById("copy-list").addEventListener("click", async (e) => {
+      const lines = recipes
+        .map((r) => {
+          const items = toBuy.filter((i) => i.recipe === r && !checked.has(i.key));
+          return items.length ? `${r.name}\n${items.map((i) => "- " + i.text).join("\n")}` : "";
+        })
+        .filter(Boolean)
+        .join("\n\n");
       try {
-        await setInCart(b.dataset.id, false);
+        await navigator.clipboard.writeText(lines);
+        e.target.textContent = "Copied!";
+        setTimeout(() => (e.target.textContent = "Copy list"), 1500);
+      } catch {
+        prompt("Copy this list:", lines);
+      }
+    });
+    document.getElementById("clear-cart").addEventListener("click", async () => {
+      if (!confirm("Empty this week's cart?")) return;
+      checked.clear();
+      saveChecked();
+      try {
+        await changeShared("cart", () => []);
       } catch (err) {
         alert(err.message);
       }
       renderCart();
-    })
-  );
+    });
+    app.querySelectorAll(".cart-recipes .remove").forEach((b) =>
+      b.addEventListener("click", async () => {
+        try {
+          await setInCart(b.dataset.id, false);
+        } catch (err) {
+          alert(err.message);
+        }
+        renderCart();
+      })
+    );
+  };
+
+  draw();
 }
 
 // ---------- pantry ----------
@@ -648,17 +677,108 @@ function defaultPantry() {
   return items;
 }
 
-// Returns a function that, given an ingredient line, names the pantry item
-// covering it (or null). The longest matching name wins, so "brown sugar"
-// beats "sugar" and "garlic powder" beats "garlic".
+// ---------- pantry matching ----------
+// Ingredient lines and pantry names are compared word by word (singular,
+// lowercase). Phrases that name a *different* product claim their words first,
+// so "peanut butter" doesn't count as butter and "flour tortillas" isn't flour.
+// If a pantry item has the same name as one of these phrases, the pantry wins.
+
+const DIFFERENT_PRODUCTS = [
+  "peanut butter", "almond butter", "apple butter", "cocoa butter", "butter bean", "butter lettuce",
+  "coconut milk", "almond milk", "oat milk", "soy milk", "condensed milk", "evaporated milk", "milk chocolate",
+  "coconut cream", "cream cheese", "sour cream", "ice cream", "heavy cream", "whipped cream", "cream of tartar",
+  "cream of mushroom", "cream of chicken",
+  "rice vinegar", "rice wine", "rice noodle", "rice paper", "rice flour", "rice cake",
+  "egg noodle", "egg roll", "flour tortilla", "corn tortilla", "tortilla chip",
+  "sweet potato", "potato chip", "potato starch", "sugar snap pea", "powdered sugar", "icing sugar",
+  "confectioners sugar", "brown sugar", "coconut sugar", "maple syrup", "corn syrup",
+  "garlic powder", "garlic salt", "garlic bread", "onion powder", "green onion", "spring onion", "onion soup mix",
+  "celery salt", "lemon pepper", "lemon curd", "lime leaf",
+  "bell pepper", "red pepper", "green pepper", "yellow pepper", "orange pepper", "jalapeno pepper", "cayenne pepper",
+  "chili pepper", "chile pepper", "poblano pepper", "serrano pepper", "banana pepper", "pepper jack", "red pepper flake",
+  "chili powder", "chili oil", "chili sauce", "chili flake",
+  "sesame oil", "sesame seed", "coconut oil", "truffle oil", "avocado oil", "peanut oil",
+  "tomato paste", "tomato sauce", "diced tomato", "crushed tomato", "sun dried tomato", "tomato soup",
+  "beef broth", "vegetable broth", "chicken broth", "beef stock", "chicken stock", "vegetable stock",
+  "soy sauce", "fish sauce", "hot sauce", "oyster sauce", "bbq sauce", "barbecue sauce", "pasta sauce",
+  "worcestershire sauce", "hoisin sauce", "teriyaki sauce", "apple sauce", "applesauce",
+  "red wine vinegar", "white wine vinegar", "apple cider vinegar", "balsamic vinegar", "sherry vinegar",
+  "baking soda", "baking powder", "club soda", "water chestnut", "coconut water",
+  "chocolate chip", "cinnamon roll", "cinnamon stick", "bread crumb", "panko bread crumb", "bread flour",
+  "black bean", "kidney bean", "green bean", "pinto bean", "cannellini bean", "refried bean",
+  "chicken thigh", "chicken breast", "lemon juice", "lime juice", "orange juice", "honey mustard",
+  "dijon mustard", "mustard seed", "vanilla ice cream", "vanilla yogurt", "salt pork",
+];
+
+// "pepper" on its own almost always means black pepper.
+const PANTRY_ALIASES = { pepper: "black pepper", "ground pepper": "black pepper", evoo: "olive oil", parmigiano: "parmesan" };
+
+const MEASURE_WORDS = new Set(
+  ("cup tbsp tsp tablespoon teaspoon oz ounce lb pound g gram kg ml l liter litre pinch dash handful can jar package pkg packet bunch stick large small medium heaping level of and or to taste a an the for about plus optional " +
+    "sliced chopped minced diced grated shredded fresh freshly finely thinly roughly coarsely peeled divided softened melted cubed halved quartered trimmed rinsed drained packed room temperature into piece serve garnish")
+    .split(" ")
+);
+
+function singular(w) {
+  if (w.length <= 3) return w;
+  if (w.endsWith("ies")) return w.slice(0, -3) + "y";
+  if (w.endsWith("oes")) return w.slice(0, -2);
+  if (/(ss|us|is)$/.test(w)) return w;
+  if (/(ches|shes|xes|sses)$/.test(w)) return w.slice(0, -2);
+  if (w.endsWith("s")) return w.slice(0, -1);
+  return w;
+}
+
+function foodWords(text) {
+  return String(text).toLowerCase().replace(/[^a-z]+/g, " ").trim().split(" ").filter(Boolean).map(singular);
+}
+
+// A stable key for an ingredient regardless of amount ("2 tbsp peanut butter"
+// and "1/4 cup peanut butter" share one), used for Have it / Need it choices.
+function ingredientKey(text) {
+  return foodWords(text.replace(/\([^)]*\)/g, " ")).filter((w) => !MEASURE_WORDS.has(w)).join(" ");
+}
+
 function pantryMatcher(pantry) {
-  const items = (pantry || [])
-    .map((p) => ({ ...p, re: new RegExp(`\\b${p.name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:e?s)?\\b`) }))
-    .sort((a, b) => b.name.length - a.name.length);
+  const phrases = [];
+  const seen = new Set();
+  for (const item of pantry || []) {
+    const words = foodWords(item.name);
+    if (!words.length) continue;
+    phrases.push({ words, item });
+    seen.add(words.join(" "));
+  }
+  for (const [alias, target] of Object.entries(PANTRY_ALIASES)) {
+    const item = (pantry || []).find((p) => p.name === target);
+    if (item) phrases.push({ words: foodWords(alias), item });
+  }
+  for (const name of DIFFERENT_PRODUCTS) {
+    const words = foodWords(name);
+    if (!seen.has(words.join(" "))) phrases.push({ words, item: null });
+  }
+
   return (text) => {
-    const line = text.toLowerCase();
-    const hit = items.find((p) => p.re.test(line));
-    return hit && hit.have ? hit.name : null;
+    const words = foodWords(text);
+    const spans = [];
+    for (const ph of phrases) {
+      for (let i = 0; i + ph.words.length <= words.length; i++) {
+        if (ph.words.every((w, j) => words[i + j] === w)) spans.push({ start: i, len: ph.words.length, item: ph.item });
+      }
+    }
+    // Longest phrase wins; on a tie, the pantry item wins.
+    spans.sort((a, b) => b.len - a.len || (b.item ? 1 : 0) - (a.item ? 1 : 0));
+    const used = new Set();
+    const taken = [];
+    for (const sp of spans) {
+      const idx = Array.from({ length: sp.len }, (_, k) => sp.start + k);
+      if (idx.some((i) => used.has(i))) continue;
+      idx.forEach((i) => used.add(i));
+      taken.push(sp);
+    }
+    const items = taken.filter((t) => t.item).map((t) => t.item);
+    const otherProducts = taken.some((t) => !t.item);
+    if (!items.length || otherProducts || !items.every((it) => it.have)) return null;
+    return [...new Set(items.map((it) => it.name))].join(" + ");
   };
 }
 
