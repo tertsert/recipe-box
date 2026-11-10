@@ -131,10 +131,7 @@ async function renderHome() {
   app.querySelectorAll(".tab").forEach((t) =>
     t.addEventListener("click", () => { view.filter = t.dataset.filter; save("filter", view.filter); drawGrid(); })
   );
-  document.getElementById("pick").addEventListener("click", () => {
-    askForMotion();
-    randomPick();
-  });
+  document.getElementById("pick").addEventListener("click", randomPick);
 
   // The bookmarklet import redirects here with ?error=… if something failed.
   const err = new URLSearchParams(location.hash.split("?")[1] || "").get("error");
@@ -342,6 +339,15 @@ async function renderRecipe(id) {
         }
       </div>
 
+      <section class="notes">
+        <div class="panel-head">
+          <h2>Notes</h2>
+          <span id="notes-status" class="hint" aria-live="polite"></span>
+        </div>
+        <textarea id="notes" class="no-print" rows="3" placeholder="Tweaks, swaps, what to try next time…">${esc(r.notes || "")}</textarea>
+        <div class="print-only notes-print">${esc(r.notes || "")}</div>
+      </section>
+
       <footer class="actions no-print">
         ${r.source ? `<a href="${esc(r.source)}" target="_blank" rel="noopener">View original on ${esc(r.site)}</a>` : ""}
         <span class="spacer"></span>
@@ -419,6 +425,39 @@ async function renderRecipe(id) {
     })
   );
   document.getElementById("uncheck")?.addEventListener("click", () => boxes.forEach((b) => (b.checked = false)));
+
+  // Notes save themselves a moment after you stop typing, and when you leave.
+  const notes = document.getElementById("notes");
+  const notesStatus = document.getElementById("notes-status");
+  const grow = () => {
+    notes.style.height = "auto";
+    notes.style.height = notes.scrollHeight + 2 + "px";
+  };
+  let savedNotes = r.notes || "";
+  let timer;
+  const saveNotes = async () => {
+    clearTimeout(timer);
+    const text = notes.value;
+    if (text === savedNotes) return;
+    notesStatus.textContent = "Saving…";
+    try {
+      await updateRecipe(r.id, { notes: text });
+      savedNotes = text;
+      r.notes = text;
+      if (notes.isConnected) notesStatus.textContent = "Saved";
+    } catch (err) {
+      notesStatus.textContent = "Couldn't save: " + err.message;
+    }
+  };
+  notes.addEventListener("input", () => {
+    grow();
+    notesStatus.textContent = "";
+    clearTimeout(timer);
+    timer = setTimeout(saveNotes, 800);
+  });
+  notes.addEventListener("blur", saveNotes);
+  window.addEventListener("hashchange", saveNotes, { once: true });
+  grow();
 
   // Tap a step to mark it done.
   app.querySelectorAll(".steps li").forEach((li) => li.addEventListener("click", () => li.classList.toggle("done")));
@@ -847,7 +886,7 @@ async function checkMilestone(justMadeId) {
   } catch {}
 }
 
-// "What should we make tonight?" — from the Pick for me button, or by shaking a phone.
+// "What should we make tonight?" — from the Pick for me button.
 async function randomPick() {
   let list;
   try {
@@ -880,48 +919,6 @@ async function randomPick() {
     if (e.target.closest(".again")) randomPick();
   });
   document.body.append(el);
-}
-
-// Shake detection. A shake is a few hard jolts within about a second; one
-// bump (setting the phone down) isn't enough.
-let motionAsked = false;
-function onMotion(e) {
-  const a = e.acceleration && e.acceleration.x != null ? e.acceleration : null;
-  const g = e.accelerationIncludingGravity;
-  let force;
-  if (a) force = Math.hypot(a.x, a.y, a.z);
-  else if (g && g.x != null) force = Math.abs(Math.hypot(g.x, g.y, g.z) - 9.81);
-  else return;
-  const now = Date.now();
-  if (now < onMotion.cooldown) return;
-  if (force > 13) {
-    onMotion.peaks = (onMotion.peaks || []).filter((t) => now - t < 1000);
-    onMotion.peaks.push(now);
-    if (onMotion.peaks.length >= 3) {
-      onMotion.peaks = [];
-      onMotion.cooldown = now + 2500;
-      randomPick();
-    }
-  }
-}
-onMotion.cooldown = 0;
-
-// iPhones only allow motion access after a tap, and show their own prompt once.
-function askForMotion() {
-  if (motionAsked) return;
-  motionAsked = true;
-  if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
-    DeviceMotionEvent.requestPermission()
-      .then((p) => p === "granted" && addEventListener("devicemotion", onMotion))
-      .catch(() => (motionAsked = false));
-  } else {
-    addEventListener("devicemotion", onMotion);
-  }
-}
-if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
-  document.addEventListener("click", askForMotion, { once: true });
-} else {
-  askForMotion();
 }
 
 // Every so often, a little "I love you!" pops up somewhere.

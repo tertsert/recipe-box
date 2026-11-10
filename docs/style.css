@@ -219,6 +219,17 @@ select.box {
 .steps li.done { color: var(--muted); }
 .steps li.done::before { content: "✓"; background: var(--line); color: var(--muted); }
 
+.notes { background: var(--white); border-radius: 12px; padding: 24px; margin-top: 24px; }
+.notes h2 { color: var(--red); font-size: 1.4rem; font-weight: 700; }
+.notes textarea {
+  width: 100%; min-height: 84px; resize: none; overflow: hidden;
+  font: inherit; line-height: 1.6; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--cream);
+}
+.notes textarea:focus { outline: 2px solid var(--red); outline-offset: 1px; background: var(--white); }
+.notes-print { white-space: pre-wrap; }
+.print-only { display: none; }
+
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 32px; font-size: .9rem; }
 .spacer { flex: 1; }
 .link-btn { border: 0; background: none; padding: 0; color: var(--muted); font-weight: 500; text-decoration: underline; }
@@ -370,6 +381,8 @@ select.box {
 .manual .status { margin: 0; max-width: none; }
 
 @media print {
+  .print-only { display: block; }
+  .notes:has(.notes-print:empty) { display: none; }
   body { background: #fff; }
   .no-print, .top, .hero-img { display: none !important; }
   .ingredients, .steps { padding: 0; }

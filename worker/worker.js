@@ -5,7 +5,7 @@
 //   GET    /api/recipes/:id    one full recipe
 //   POST   /api/recipes        { url } -> fetch page, extract recipe, save it
 //                              { manual: { name, ingredients[], instructions[], ... } } -> save as typed
-//   PATCH  /api/recipes/:id    { made?, rating? } -> update status / stars
+//   PATCH  /api/recipes/:id    { made?, rating?, notes? } -> update status / stars / notes
 //   DELETE /api/recipes/:id    remove a recipe
 //   POST   /api/import         form post from the bookmarklet (url, data)
 //   GET    /api/state/:name    shared list ("cart" or "pantry") -> { items }
@@ -203,6 +203,7 @@ async function updateRecipe(request, env, id) {
     if (!Number.isInteger(r) || r < 0 || r > 5) throw httpError(400, "Rating must be 0-5.");
     recipe.rating = r;
   }
+  if (typeof body.notes === "string") recipe.notes = body.notes.slice(0, 10000);
   await putRecipe(env, recipe);
   return json({ recipe });
 }
