@@ -6,11 +6,15 @@ const view = { filter: load("filter", "all"), sort: load("sort", "new"), query: 
 
 // ---------- API ----------
 
-async function api(path = "", opts = {}) {
-  const res = await fetch(API + path, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
+async function request(url, opts = {}) {
+  const res = await fetch(url, { ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
+}
+
+function api(path = "", opts = {}) {
+  return request(API + path, opts);
 }
 
 async function updateRecipe(id, changes) {
@@ -20,8 +24,29 @@ async function updateRecipe(id, changes) {
   return recipe;
 }
 
+async function loadRecipes() {
+  if (cache) return cache;
+  const fresh = (await api()).recipes;
+  // Cloudflare's list can lag a minute behind; keep anything we just added.
+  let pending = [];
+  try {
+    pending = JSON.parse(sessionStorage.getItem("rb-added") || "[]").filter((p) => !fresh.some((r) => r.id === p.id));
+  } catch {}
+  cache = [...pending, ...fresh];
+  return cache;
+}
+
 function summarize(r) {
   return { id: r.id, name: r.name, image: r.image, site: r.site, addedAt: r.addedAt, made: !!r.made, rating: r.rating || 0 };
+}
+
+function rememberAdded(recipe) {
+  const s = summarize(recipe);
+  if (cache && !cache.some((x) => x.id === s.id)) cache.unshift(s);
+  try {
+    const list = JSON.parse(sessionStorage.getItem("rb-added") || "[]");
+    sessionStorage.setItem("rb-added", JSON.stringify([s, ...list.filter((x) => x.id !== s.id)].slice(0, 20)));
+  } catch {}
 }
 
 function load(key, fallback) {
@@ -31,20 +56,63 @@ function save(key, value) {
   try { localStorage.setItem("rb-" + key, value); } catch {}
 }
 
+// ---------- shared lists (cart + pantry, stored in the worker) ----------
+
+const shared = { cart: null, pantry: null };
+const defaults = { cart: () => [], pantry: defaultPantry };
+
+async function loadShared(name, fresh = false) {
+  if (shared[name] && !fresh) return shared[name];
+  const { items } = await request(`${API_BASE}/api/state/${name}`);
+  shared[name] = items || defaults[name]();
+  if (name === "cart") updateNav();
+  return shared[name];
+}
+
+// Apply `fn` locally right away, then to the latest saved copy, so two
+// phones editing at once don't wipe each other out. `fn` must be safe to
+// apply twice (add/remove, not toggle).
+async function changeShared(name, fn) {
+  shared[name] = fn(shared[name] || defaults[name]());
+  if (name === "cart") updateNav();
+  const { items } = await request(`${API_BASE}/api/state/${name}`);
+  const next = fn(items || defaults[name]());
+  shared[name] = next;
+  await request(`${API_BASE}/api/state/${name}`, { method: "PUT", body: JSON.stringify({ items: next }) });
+  if (name === "cart") updateNav();
+  return next;
+}
+
+const inCart = (id) => !!shared.cart && shared.cart.includes(id);
+const setInCart = (id, on) => changeShared("cart", (list) => (on ? (list.includes(id) ? list : [...list, id]) : list.filter((x) => x !== id)));
+
+function updateNav() {
+  const n = shared.cart ? shared.cart.length : 0;
+  document.getElementById("cart-count").textContent = n ? n : "";
+  const route = location.hash.split("?")[0];
+  document.querySelectorAll(".nav a").forEach((a) => {
+    const here = a.dataset.route === "home" ? !/^#\/(cart|pantry)/.test(route) : route.startsWith("#/" + a.dataset.route);
+    a.classList.toggle("active", here);
+  });
+}
+
 // ---------- routing ----------
 
 window.addEventListener("hashchange", render);
 render();
+loadShared("cart").catch(() => {});
 
 function render() {
-  const m = location.hash.match(/^#\/r\/([^?]+)/);
+  const route = location.hash.split("?")[0];
+  const m = route.match(/^#\/r\/(.+)$/);
   window.scrollTo(0, 0);
-  if (m) {
-    renderRecipe(decodeURIComponent(m[1]));
-  } else {
-    document.title = "A+M Recipe Box";
-    renderHome();
-  }
+  updateNav();
+  document.title = "A+M Recipe Box";
+  if (m) renderRecipe(decodeURIComponent(m[1]));
+  else if (route === "#/cart") renderCart();
+  else if (route === "#/pantry") renderPantry();
+  else if (route === "#/new") renderNewRecipe();
+  else renderHome();
 }
 
 // ---------- home ----------
@@ -63,22 +131,21 @@ async function renderHome() {
   app.querySelectorAll(".tab").forEach((t) =>
     t.addEventListener("click", () => { view.filter = t.dataset.filter; save("filter", view.filter); drawGrid(); })
   );
+  document.getElementById("pick").addEventListener("click", () => {
+    askForMotion();
+    randomPick();
+  });
 
   // The bookmarklet import redirects here with ?error=… if something failed.
   const err = new URLSearchParams(location.hash.split("?")[1] || "").get("error");
   if (err) setStatus(err, true);
 
-  if (!cache) {
-    grid.innerHTML = `<p class="empty">Loading…</p>`;
-    try {
-      const fresh = (await api()).recipes;
-      // Cloudflare's list can lag a minute behind; keep anything we just added.
-      const pending = JSON.parse(sessionStorage.getItem("rb-added") || "[]").filter((p) => !fresh.some((r) => r.id === p.id));
-      cache = [...pending, ...fresh];
-    } catch (e) {
-      grid.innerHTML = `<p class="empty error">Couldn't load recipes: ${esc(e.message)}</p>`;
-      return;
-    }
+  if (!cache) grid.innerHTML = `<p class="empty">Loading…</p>`;
+  try {
+    await Promise.all([loadRecipes(), loadShared("cart").catch(() => {})]);
+  } catch (e) {
+    grid.innerHTML = `<p class="empty error">Couldn't load recipes: ${esc(e.message)}</p>`;
+    return;
   }
   drawGrid();
 }
@@ -105,15 +172,6 @@ function setupAddForm() {
   });
 }
 
-function rememberAdded(recipe) {
-  const s = summarize(recipe);
-  if (cache) cache.unshift(s);
-  try {
-    const list = JSON.parse(sessionStorage.getItem("rb-added") || "[]");
-    sessionStorage.setItem("rb-added", JSON.stringify([s, ...list].slice(0, 20)));
-  } catch {}
-}
-
 function setStatus(text, isError) {
   const status = document.getElementById("add-status");
   if (!status) return;
@@ -123,7 +181,7 @@ function setStatus(text, isError) {
 
 function drawGrid() {
   const grid = document.getElementById("grid");
-  if (!grid) return;
+  if (!grid || !cache) return;
 
   const counts = { all: cache.length, made: cache.filter((r) => r.made).length };
   counts.todo = counts.all - counts.made;
@@ -170,9 +228,10 @@ function drawGrid() {
           <h3>${esc(r.name)}</h3>
         </a>
         ${r.made && r.rating ? `<div class="stars-mini" aria-label="${r.rating} out of 5 stars">${starText(r.rating)}</div>` : ""}
-        <button type="button" class="made-chip" data-id="${esc(r.id)}" aria-pressed="${!!r.made}">
-          ${r.made ? "✓ Made" : "Mark as made"}
-        </button>
+        <div class="card-actions">
+          <button type="button" class="chip-btn made-chip" data-id="${esc(r.id)}" aria-pressed="${!!r.made}">${r.made ? "✓ Made" : "Mark made"}</button>
+          <button type="button" class="chip-btn cart-chip" data-id="${esc(r.id)}" aria-pressed="${inCart(r.id)}">${inCart(r.id) ? "✓ In cart" : "+ Cart"}</button>
+        </div>
       </div>`
     )
     .join("");
@@ -193,6 +252,20 @@ function drawGrid() {
       }
     })
   );
+  grid.querySelectorAll(".cart-chip").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      const on = !inCart(id);
+      const done = setInCart(id, on);
+      drawGrid();
+      try {
+        await done;
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+      drawGrid();
+    })
+  );
 }
 
 function starText(n) {
@@ -205,7 +278,7 @@ async function renderRecipe(id) {
   app.innerHTML = `<p class="empty">Loading…</p>`;
   let r;
   try {
-    r = (await api("/" + encodeURIComponent(id))).recipe;
+    [r] = await Promise.all([api("/" + encodeURIComponent(id)).then((d) => d.recipe), loadShared("cart").catch(() => {})]);
   } catch (err) {
     app.innerHTML = `<p class="empty error">${esc(err.message)}</p><p class="empty"><a href="#/">← Back to recipes</a></p>`;
     return;
@@ -228,24 +301,34 @@ async function renderRecipe(id) {
       ${times.length ? `<dl class="meta">${times.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>` : ""}
       ${r.image ? `<img class="hero-img" src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
 
-      <section class="status-panel no-print" aria-label="Made it and rating">
+      <section class="status-panel no-print" aria-label="Made it, rating and cart">
         <label class="switch">
           <input type="checkbox" id="made" role="switch" ${r.made ? "checked" : ""}>
           <span class="track" aria-hidden="true"><span class="knob"></span></span>
           <span>We've made this</span>
         </label>
         <div class="rater" role="radiogroup" aria-label="Rating"></div>
+        <button type="button" id="cart-btn" class="btn-outline"></button>
       </section>
 
       <div class="cols">
-        <section class="ingredients">
-          <h2>Ingredients</h2>
+        ${
+          r.ingredients.length
+            ? `<section class="ingredients">
+          <div class="panel-head">
+            <h2>Ingredients</h2>
+            <button type="button" id="uncheck" class="link-btn no-print">Uncheck all</button>
+          </div>
           <ul>
             ${r.ingredients.map((i, n) => `<li><label><input type="checkbox" id="ing-${n}"><span>${esc(i)}</span></label></li>`).join("")}
           </ul>
-        </section>
+        </section>`
+            : ""
+        }
 
-        <section class="steps">
+        ${
+          r.instructions.length
+            ? `<section class="steps">
           <h2>Directions</h2>
           ${r.instructions
             .map(
@@ -254,11 +337,13 @@ async function renderRecipe(id) {
               <ol>${s.steps.map((t) => `<li>${esc(t)}</li>`).join("")}</ol>`
             )
             .join("")}
-        </section>
+        </section>`
+            : ""
+        }
       </div>
 
       <footer class="actions no-print">
-        <a href="${esc(r.source)}" target="_blank" rel="noopener">View original on ${esc(r.site)}</a>
+        ${r.source ? `<a href="${esc(r.source)}" target="_blank" rel="noopener">View original on ${esc(r.site)}</a>` : ""}
         <span class="spacer"></span>
         <button type="button" id="print" class="link-btn">Print</button>
         <button type="button" id="delete" class="link-btn danger">Delete</button>
@@ -267,6 +352,23 @@ async function renderRecipe(id) {
 
   const madeBox = document.getElementById("made");
   const rater = app.querySelector(".rater");
+  const cartBtn = document.getElementById("cart-btn");
+
+  const drawCartBtn = () => {
+    cartBtn.textContent = inCart(r.id) ? "✓ In this week's cart" : "+ Add to cart";
+    cartBtn.classList.toggle("on", inCart(r.id));
+  };
+  drawCartBtn();
+  cartBtn.addEventListener("click", async () => {
+    const done = setInCart(r.id, !inCart(r.id));
+    drawCartBtn();
+    try {
+      await done;
+    } catch (err) {
+      alert(err.message);
+    }
+    drawCartBtn();
+  });
 
   const drawRater = () => {
     rater.innerHTML = r.made
@@ -316,6 +418,7 @@ async function renderRecipe(id) {
       if (b.checked && boxes.every((x) => x.checked)) bubble("Shopping done ✓");
     })
   );
+  document.getElementById("uncheck")?.addEventListener("click", () => boxes.forEach((b) => (b.checked = false)));
 
   // Tap a step to mark it done.
   app.querySelectorAll(".steps li").forEach((li) => li.addEventListener("click", () => li.classList.toggle("done")));
@@ -325,6 +428,8 @@ async function renderRecipe(id) {
     try {
       await api("/" + encodeURIComponent(id), { method: "DELETE" });
       if (cache) cache = cache.filter((x) => x.id !== id);
+      if (shared.cart) shared.cart = shared.cart.filter((x) => x !== id); // the worker drops it too
+      updateNav();
       try {
         const list = JSON.parse(sessionStorage.getItem("rb-added") || "[]");
         sessionStorage.setItem("rb-added", JSON.stringify(list.filter((x) => x.id !== id)));
@@ -334,6 +439,304 @@ async function renderRecipe(id) {
       alert(err.message);
     }
   });
+}
+
+// ---------- type a recipe in ----------
+
+function renderNewRecipe() {
+  document.title = "New recipe · A+M Recipe Box";
+  app.innerHTML = `
+    <article class="recipe">
+      <a href="#/" class="back">← All recipes</a>
+      <h1>Type in a recipe</h1>
+      <p class="lede">For the ones from TikTok, Instagram, or a friend's kitchen.</p>
+      <form id="manual" class="manual" autocomplete="off">
+        <label>Name<input name="name" required maxlength="200" placeholder="Hot honey salmon bowls"></label>
+        <label>Ingredients <span class="opt">one per line</span>
+          <textarea name="ingredients" rows="8" placeholder="2 salmon fillets&#10;1 tbsp hot honey&#10;1 cup rice"></textarea></label>
+        <label>Steps <span class="opt">one per line</span>
+          <textarea name="instructions" rows="8" placeholder="Cook the rice.&#10;Glaze the salmon and bake at 400°F for 12 minutes."></textarea></label>
+        <div class="row">
+          <label>Makes <span class="opt">optional</span><input name="yield" maxlength="60" placeholder="2 servings"></label>
+          <label>Total time <span class="opt">optional</span><input name="totalTime" maxlength="60" placeholder="30 min"></label>
+        </div>
+        <label>Where you found it <span class="opt">optional link</span><input name="source" type="url" inputmode="url" placeholder="https://www.tiktok.com/…"></label>
+        <label>Photo <span class="opt">optional image link</span><input name="image" type="url" inputmode="url" placeholder="https://…/photo.jpg"></label>
+        <p id="manual-status" class="status error" role="status"></p>
+        <button type="submit" class="btn">Save recipe</button>
+      </form>
+    </article>`;
+
+  const form = document.getElementById("manual");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const status = document.getElementById("manual-status");
+    const button = form.querySelector("button");
+    status.textContent = "";
+    button.disabled = true;
+    try {
+      const { recipe } = await api("", { method: "POST", body: JSON.stringify({ manual: data }) });
+      rememberAdded(recipe);
+      location.hash = "#/r/" + encodeURIComponent(recipe.id);
+    } catch (err) {
+      status.textContent = err.message;
+      button.disabled = false;
+    }
+  });
+}
+
+// ---------- cart: this week's recipes + shopping list ----------
+
+async function renderCart() {
+  document.title = "Cart · A+M Recipe Box";
+  app.innerHTML = `<p class="empty">Loading…</p>`;
+  let ids, pantry;
+  try {
+    [ids, pantry] = await Promise.all([loadShared("cart", true), loadShared("pantry").catch(() => [])]);
+  } catch (err) {
+    app.innerHTML = `<p class="empty error">Couldn't load the cart: ${esc(err.message)}</p>`;
+    return;
+  }
+
+  if (!ids.length) {
+    app.innerHTML = `
+      <section class="page-head"><h1>This Week's Cart</h1></section>
+      <p class="empty">Nothing in the cart yet. Tap <strong>+ Cart</strong> on any recipe to plan it for this week.<br><br><a href="#/">Browse recipes</a></p>`;
+    return;
+  }
+
+  const recipes = (
+    await Promise.all(ids.map((id) => api("/" + encodeURIComponent(id)).then((d) => d.recipe).catch(() => null)))
+  ).filter(Boolean);
+
+  const have = pantryMatcher(pantry);
+  const toBuy = [];
+  const covered = [];
+  for (const r of recipes) {
+    r.ingredients.forEach((text, n) => {
+      const item = { key: `${r.id}|${n}`, text, recipe: r };
+      const match = have(text);
+      if (match) covered.push({ ...item, match });
+      else toBuy.push(item);
+    });
+  }
+
+  const checked = new Set(JSON.parse(load("shop-checked", "[]")));
+  const saveChecked = () => save("shop-checked", JSON.stringify([...checked]));
+
+  const groups = recipes
+    .map((r) => {
+      const items = toBuy.filter((i) => i.recipe === r);
+      if (!items.length) return "";
+      return `
+        <h3>${esc(r.name)}</h3>
+        <ul class="shop">${items
+          .map(
+            (i) =>
+              `<li><label><input type="checkbox" data-key="${esc(i.key)}" ${checked.has(i.key) ? "checked" : ""}><span>${esc(i.text)}</span></label></li>`
+          )
+          .join("")}</ul>`;
+    })
+    .join("");
+
+  app.innerHTML = `
+    <section class="page-head">
+      <h1>This Week's Cart</h1>
+      <p class="lede">${recipes.length} recipe${recipes.length === 1 ? "" : "s"} planned · ${toBuy.length} thing${toBuy.length === 1 ? "" : "s"} to buy</p>
+    </section>
+
+    <ul class="cart-recipes">
+      ${recipes
+        .map(
+          (r) => `
+        <li>
+          <a href="#/r/${encodeURIComponent(r.id)}">
+            <span class="mini-thumb">${r.image ? `<img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}</span>
+            <span class="name">${esc(r.name)}</span>
+          </a>
+          <button type="button" class="link-btn remove" data-id="${esc(r.id)}">Remove</button>
+        </li>`
+        )
+        .join("")}
+    </ul>
+
+    <section class="shopping">
+      <div class="panel-head">
+        <h2>Shopping list</h2>
+        <div class="panel-actions">
+          <button type="button" id="copy-list" class="link-btn">Copy list</button>
+          <button type="button" id="uncheck-list" class="link-btn">Uncheck all</button>
+          <button type="button" id="clear-cart" class="link-btn danger">Empty cart</button>
+        </div>
+      </div>
+      ${groups || `<p class="hint">Everything's already in the pantry.</p>`}
+      ${
+        covered.length
+          ? `<details class="covered">
+        <summary>Already in the pantry (${covered.length})</summary>
+        <ul>${covered.map((i) => `<li>${esc(i.text)} <span class="tag">${esc(i.match)}</span></li>`).join("")}</ul>
+      </details>`
+          : ""
+      }
+    </section>`;
+
+  app.querySelectorAll(".shop input").forEach((box) =>
+    box.addEventListener("change", () => {
+      box.checked ? checked.add(box.dataset.key) : checked.delete(box.dataset.key);
+      saveChecked();
+    })
+  );
+  document.getElementById("uncheck-list").addEventListener("click", () => {
+    checked.clear();
+    saveChecked();
+    app.querySelectorAll(".shop input").forEach((b) => (b.checked = false));
+  });
+  document.getElementById("copy-list").addEventListener("click", async (e) => {
+    const lines = recipes
+      .map((r) => {
+        const items = toBuy.filter((i) => i.recipe === r && !checked.has(i.key));
+        return items.length ? `${r.name}\n${items.map((i) => "- " + i.text).join("\n")}` : "";
+      })
+      .filter(Boolean)
+      .join("\n\n");
+    try {
+      await navigator.clipboard.writeText(lines);
+      e.target.textContent = "Copied!";
+      setTimeout(() => (e.target.textContent = "Copy list"), 1500);
+    } catch {
+      prompt("Copy this list:", lines);
+    }
+  });
+  document.getElementById("clear-cart").addEventListener("click", async () => {
+    if (!confirm("Empty this week's cart?")) return;
+    checked.clear();
+    saveChecked();
+    try {
+      await changeShared("cart", () => []);
+    } catch (err) {
+      alert(err.message);
+    }
+    renderCart();
+  });
+  app.querySelectorAll(".cart-recipes .remove").forEach((b) =>
+    b.addEventListener("click", async () => {
+      try {
+        await setInCart(b.dataset.id, false);
+      } catch (err) {
+        alert(err.message);
+      }
+      renderCart();
+    })
+  );
+}
+
+// ---------- pantry ----------
+
+function defaultPantry() {
+  const groups = {
+    "Spices & seasonings": ["salt", "black pepper", "garlic powder", "onion powder", "paprika", "chili powder", "cumin", "oregano", "italian seasoning", "red pepper flakes", "cinnamon"],
+    "Oils, vinegars & sauces": ["olive oil", "vegetable oil", "sesame oil", "soy sauce", "vinegar", "honey", "hot sauce", "dijon mustard", "mayonnaise", "ketchup"],
+    Baking: ["flour", "sugar", "brown sugar", "baking soda", "baking powder", "vanilla", "cornstarch"],
+    "Grains & pasta": ["rice", "pasta", "oats", "bread crumbs", "tortillas"],
+    "Cans & jars": ["chicken broth", "diced tomatoes", "tomato paste", "black beans", "coconut milk", "peanut butter"],
+    "Fridge & freezer": ["butter", "egg", "milk", "parmesan", "cheddar", "heavy cream", "frozen peas"],
+    Produce: ["garlic", "onion", "lemon", "lime", "potato"],
+  };
+  const items = [{ name: "water", cat: "Basics", have: true }];
+  for (const [cat, names] of Object.entries(groups)) for (const name of names) items.push({ name, cat, have: false });
+  return items;
+}
+
+// Returns a function that, given an ingredient line, names the pantry item
+// covering it (or null). The longest matching name wins, so "brown sugar"
+// beats "sugar" and "garlic powder" beats "garlic".
+function pantryMatcher(pantry) {
+  const items = (pantry || [])
+    .map((p) => ({ ...p, re: new RegExp(`\\b${p.name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:e?s)?\\b`) }))
+    .sort((a, b) => b.name.length - a.name.length);
+  return (text) => {
+    const line = text.toLowerCase();
+    const hit = items.find((p) => p.re.test(line));
+    return hit && hit.have ? hit.name : null;
+  };
+}
+
+async function renderPantry() {
+  document.title = "Pantry · A+M Recipe Box";
+  app.innerHTML = `<p class="empty">Loading…</p>`;
+  let items;
+  try {
+    items = await loadShared("pantry", true);
+  } catch (err) {
+    app.innerHTML = `<p class="empty error">Couldn't load the pantry: ${esc(err.message)}</p>`;
+    return;
+  }
+
+  const draw = () => {
+    const cats = [...new Set(items.map((i) => i.cat))];
+    const haveCount = items.filter((i) => i.have).length;
+    app.innerHTML = `
+      <section class="page-head">
+        <h1>Pantry</h1>
+        <p class="lede">Tap what you have on hand. The cart's shopping list skips anything that's on the shelf.</p>
+        <form id="pantry-add" class="add" autocomplete="off">
+          <input id="pantry-name" placeholder="Add something (e.g. fish sauce)" required maxlength="60" aria-label="Pantry item">
+          <button type="submit" class="btn">Add</button>
+        </form>
+        <p class="hint center">${haveCount} of ${items.length} on the shelf</p>
+      </section>
+      ${cats
+        .map(
+          (cat) => `
+        <section class="shelf">
+          <h2>${esc(cat)}</h2>
+          <div class="chips">
+            ${items
+              .map((it, i) => ({ it, i }))
+              .filter(({ it }) => it.cat === cat)
+              .map(
+                ({ it, i }) => `
+              <span class="pantry-chip${it.have ? " have" : ""}">
+                <button type="button" class="toggle" data-i="${i}" aria-pressed="${it.have}">${it.have ? "✓ " : ""}${esc(it.name)}</button>
+                <button type="button" class="x" data-i="${i}" aria-label="Remove ${esc(it.name)}">×</button>
+              </span>`
+              )
+              .join("")}
+          </div>
+        </section>`
+        )
+        .join("")}`;
+
+    app.querySelectorAll(".pantry-chip .toggle").forEach((b) =>
+      b.addEventListener("click", () => {
+        const it = items[b.dataset.i];
+        const have = !it.have;
+        persist((list) => list.map((x) => (x.name === it.name ? { ...x, have } : x)));
+      })
+    );
+    app.querySelectorAll(".pantry-chip .x").forEach((b) =>
+      b.addEventListener("click", () => {
+        const name = items[b.dataset.i].name;
+        persist((list) => list.filter((x) => x.name !== name));
+      })
+    );
+    document.getElementById("pantry-add").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = document.getElementById("pantry-name").value.trim().toLowerCase();
+      if (!name) return;
+      persist((list) => (list.some((x) => x.name === name) ? list.map((x) => (x.name === name ? { ...x, have: true } : x)) : [...list, { name, cat: "Other", have: true }]));
+    });
+  };
+
+  const persist = (fn) => {
+    const done = changeShared("pantry", fn);
+    items = shared.pantry;
+    draw();
+    done.then((next) => { items = next; }).catch((err) => alert(err.message));
+  };
+
+  draw();
 }
 
 // ---------- blocked sites: bookmarklet ----------
@@ -444,12 +847,12 @@ function showSalmonNote() {
   el.className = "pick";
   el.innerHTML = `
     <div class="pick-card salmon-card" role="dialog" aria-label="A note for Alaskan Salmon">
+      <button type="button" class="close-x" aria-label="Close">×</button>
       <div class="salmon-fish">${FISH}</div>
       <h2>I love you, Alaskan Salmon</h2>
-      <button type="button" class="btn">I love you too!${HEART}</button>
     </div>`;
   el.addEventListener("click", (e) => {
-    if (e.target !== el && !e.target.closest("button")) return;
+    if (e.target !== el && !e.target.closest(".close-x")) return;
     el.remove();
     document.querySelector(".brand").textContent = "Alaskan Salmon's Recipe Box";
   });
@@ -459,7 +862,7 @@ function showSalmonNote() {
 // Milestones for meals made: a one-time celebration at 10, 25, 50, 100.
 async function checkMilestone(justMadeId) {
   try {
-    const list = cache || (await api()).recipes;
+    const list = await loadRecipes();
     // The list can lag a moment behind the save, so count this one regardless.
     const made = list.filter((r) => r.made || r.id === justMadeId).length;
     const hit = [10, 25, 50, 100].find((n) => n === made);
@@ -469,21 +872,26 @@ async function checkMilestone(justMadeId) {
   } catch {}
 }
 
-// Shake the phone: "What should we make tonight?"
+// "What should we make tonight?" — from the Pick for me button, or by shaking a phone.
 async function randomPick() {
+  let list;
   try {
-    if (!cache) cache = (await api()).recipes;
+    list = await loadRecipes();
   } catch {
     return;
   }
-  const pool = cache.filter((r) => !r.made).length ? cache.filter((r) => !r.made) : cache;
+  const todo = list.filter((r) => !r.made);
+  const pool = todo.length ? todo : list;
   if (!pool.length) return;
-  const r = pool[Math.floor(Math.random() * pool.length)];
+  const current = document.querySelector(".pick h3")?.textContent;
+  const choices = pool.length > 1 ? pool.filter((r) => r.name !== current) : pool; // don't repeat on "pick another"
+  const r = choices[Math.floor(Math.random() * choices.length)];
   document.querySelector(".pick")?.remove();
   const el = document.createElement("div");
   el.className = "pick";
   el.innerHTML = `
     <div class="pick-card" role="dialog" aria-label="Random recipe pick">
+      <button type="button" class="close-x" aria-label="Close">×</button>
       <p class="pick-q">What should we make tonight?</p>
       ${r.image ? `<img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
       <h3>${esc(r.name)}</h3>
@@ -493,37 +901,53 @@ async function randomPick() {
       </div>
     </div>`;
   el.addEventListener("click", (e) => {
-    if (e.target === el || e.target.closest("a")) el.remove();
+    if (e.target === el || e.target.closest("a") || e.target.closest(".close-x")) el.remove();
     if (e.target.closest(".again")) randomPick();
   });
   document.body.append(el);
 }
 
-(() => {
-  let last = null, cooldown = 0;
-  const onMotion = (e) => {
-    const a = e.accelerationIncludingGravity;
-    if (!a || a.x == null) return;
-    if (last) {
-      const jolt = Math.abs(a.x - last.x) + Math.abs(a.y - last.y) + Math.abs(a.z - last.z);
-      if (jolt > 35 && Date.now() > cooldown) {
-        cooldown = Date.now() + 2500;
-        randomPick();
-      }
+// Shake detection. A shake is a few hard jolts within about a second; one
+// bump (setting the phone down) isn't enough.
+let motionAsked = false;
+function onMotion(e) {
+  const a = e.acceleration && e.acceleration.x != null ? e.acceleration : null;
+  const g = e.accelerationIncludingGravity;
+  let force;
+  if (a) force = Math.hypot(a.x, a.y, a.z);
+  else if (g && g.x != null) force = Math.abs(Math.hypot(g.x, g.y, g.z) - 9.81);
+  else return;
+  const now = Date.now();
+  if (now < onMotion.cooldown) return;
+  if (force > 13) {
+    onMotion.peaks = (onMotion.peaks || []).filter((t) => now - t < 1000);
+    onMotion.peaks.push(now);
+    if (onMotion.peaks.length >= 3) {
+      onMotion.peaks = [];
+      onMotion.cooldown = now + 2500;
+      randomPick();
     }
-    last = { x: a.x, y: a.y, z: a.z };
-  };
-  // iPhones only allow motion access after a tap, and ask once.
+  }
+}
+onMotion.cooldown = 0;
+
+// iPhones only allow motion access after a tap, and show their own prompt once.
+function askForMotion() {
+  if (motionAsked) return;
+  motionAsked = true;
   if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
-    document.addEventListener(
-      "click",
-      () => DeviceMotionEvent.requestPermission().then((p) => p === "granted" && addEventListener("devicemotion", onMotion)).catch(() => {}),
-      { once: true }
-    );
+    DeviceMotionEvent.requestPermission()
+      .then((p) => p === "granted" && addEventListener("devicemotion", onMotion))
+      .catch(() => (motionAsked = false));
   } else {
     addEventListener("devicemotion", onMotion);
   }
-})();
+}
+if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+  document.addEventListener("click", askForMotion, { once: true });
+} else {
+  askForMotion();
+}
 
 // Every so often, a little "I love you!" pops up somewhere.
 (function loveNote() {

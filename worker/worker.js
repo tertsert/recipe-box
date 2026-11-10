@@ -4,9 +4,12 @@
 //   GET    /api/recipes        list saved recipes (summary only)
 //   GET    /api/recipes/:id    one full recipe
 //   POST   /api/recipes        { url } -> fetch page, extract recipe, save it
+//                              { manual: { name, ingredients[], instructions[], ... } } -> save as typed
 //   PATCH  /api/recipes/:id    { made?, rating? } -> update status / stars
 //   DELETE /api/recipes/:id    remove a recipe
 //   POST   /api/import         form post from the bookmarklet (url, data)
+//   GET    /api/state/:name    shared list ("cart" or "pantry") -> { items }
+//   PUT    /api/state/:name    { items } -> replace that list
 //
 // Bindings (set in wrangler.toml or the Cloudflare dashboard):
 //   RECIPES          KV namespace (required)
@@ -35,6 +38,7 @@ async function route(request, env) {
   const url = new URL(request.url);
   const parts = url.pathname.replace(/\/+$/, "").split("/").filter(Boolean); // ["api","recipes",id?]
   if (url.pathname === "/api/import" && request.method === "POST") return importRecipe(request, env);
+  if (parts[0] === "api" && parts[1] === "state" && parts.length === 3) return sharedState(request, env, parts[2]);
   if (parts[0] !== "api" || parts[1] !== "recipes" || parts.length > 3) throw httpError(404, "Not found");
   const id = parts[2];
 
@@ -67,6 +71,7 @@ async function getRecipe(env, id) {
 
 async function addRecipe(request, env) {
   const body = await request.json().catch(() => ({}));
+  if (body.manual) return json({ recipe: await saveManualRecipe(env, body.manual) }, 201);
   const target = normalizeUrl(body.url);
 
   const existing = await findExisting(env, target);
@@ -107,16 +112,85 @@ async function saveRecipe(env, target, html) {
     throw httpError(422, "Couldn't find a recipe on that page. Some sites don't publish their recipe in a readable format.");
   }
 
+  await putNewRecipe(env, recipe);
+  await env.RECIPES.put("u:" + target, recipe.id);
+  return recipe;
+}
+
+// A recipe typed in by hand (e.g. from a TikTok or Instagram video).
+async function saveManualRecipe(env, m) {
+  const lines = (v) =>
+    toArray(v)
+      .flatMap((x) => String(x).split(/\r?\n/))
+      .map((x) => x.replace(/^\s*(?:[-*•]|\d+[.)](?=\s))\s*/, "").trim())
+      .filter(Boolean)
+      .slice(0, 200)
+      .map((x) => x.slice(0, 1000));
+  const name = String(m.name || "").trim().slice(0, 200);
+  const ingredients = lines(m.ingredients);
+  const steps = lines(m.instructions);
+  if (!name) throw httpError(400, "Give the recipe a name.");
+  if (!ingredients.length && !steps.length) throw httpError(400, "Add at least one ingredient or step.");
+
+  let source = "";
+  let site = "Added by hand";
+  if (String(m.source || "").trim()) {
+    source = normalizeUrl(m.source);
+    site = new URL(source).hostname.replace(/^www\./, "");
+  }
+  let image = String(m.image || "").trim();
+  if (image && !/^https?:\/\//i.test(image)) image = "";
+
+  const recipe = {
+    name,
+    description: "",
+    image: image.slice(0, 2000),
+    yield: String(m.yield || "").trim().slice(0, 60),
+    prepTime: "",
+    cookTime: "",
+    totalTime: String(m.totalTime || "").trim().slice(0, 60),
+    ingredients,
+    instructions: steps.length ? [{ section: null, steps }] : [],
+    source,
+    site,
+    manual: true,
+  };
+  await putNewRecipe(env, recipe);
+  return recipe;
+}
+
+async function putNewRecipe(env, recipe) {
   // Reverse timestamp so KV's alphabetical listing comes back newest first.
-  const id = String(9999999999999 - Date.now()).padStart(13, "0") + "-" + Math.random().toString(36).slice(2, 7);
-  recipe.id = id;
+  recipe.id = String(9999999999999 - Date.now()).padStart(13, "0") + "-" + Math.random().toString(36).slice(2, 7);
   recipe.addedAt = new Date().toISOString();
   recipe.made = false;
   recipe.rating = 0;
-
   await putRecipe(env, recipe);
-  await env.RECIPES.put("u:" + target, id);
-  return recipe;
+}
+
+// Shared lists both of you see: the week's cart (recipe ids) and the pantry shelf.
+const STATE_NAMES = ["cart", "pantry"];
+
+async function sharedState(request, env, name) {
+  if (!STATE_NAMES.includes(name)) throw httpError(404, "Not found");
+  const key = "state:" + name;
+  if (request.method === "GET") {
+    return json({ items: (await env.RECIPES.get(key, "json")) || null });
+  }
+  if (request.method === "PUT") {
+    const text = await request.text();
+    if (text.length > 200_000) throw httpError(413, "That list is too big.");
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw httpError(400, "Bad list data.");
+    }
+    if (!Array.isArray(body.items)) throw httpError(400, "Bad list data.");
+    await env.RECIPES.put(key, JSON.stringify(body.items));
+    return json({ items: body.items });
+  }
+  throw httpError(405, "Method not allowed");
 }
 
 async function updateRecipe(request, env, id) {
@@ -151,7 +225,11 @@ async function deleteRecipe(env, id) {
   const recipe = await env.RECIPES.get("r:" + id, "json");
   if (!recipe) throw httpError(404, "Recipe not found");
   await env.RECIPES.delete("r:" + id);
-  if (recipe.source) await env.RECIPES.delete("u:" + recipe.source);
+  if (recipe.source && !recipe.manual) await env.RECIPES.delete("u:" + recipe.source);
+  const cart = await env.RECIPES.get("state:cart", "json");
+  if (Array.isArray(cart) && cart.includes(id)) {
+    await env.RECIPES.put("state:cart", JSON.stringify(cart.filter((x) => x !== id)));
+  }
   return json({ ok: true });
 }
 
@@ -367,7 +445,7 @@ function toArray(v) {
 function corsHeaders(env) {
   return {
     "Access-Control-Allow-Origin": env.ALLOWED_ORIGIN || "*",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
